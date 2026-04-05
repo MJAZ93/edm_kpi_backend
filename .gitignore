@@ -1,0 +1,9 @@
+.env
+uploads/
+docs/swagger.json
+docs/swagger.yaml
+docs/docs.go
+*.exe
+*.test
+*.out
+vendor/
