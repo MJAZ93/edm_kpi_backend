@@ -15,8 +15,9 @@ type PelouroController struct{}
 
 func (PelouroController) List(c *gin.Context) {
 	params := util.ParsePagination(c)
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	pelouroDao := dao.PelouroDao{}
-	list, total, err := pelouroDao.List(params.Page, params.Limit)
+	list, total, err := pelouroDao.ListScoped(params.Page, params.Limit, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -87,6 +88,7 @@ func (PelouroController) Update(c *gin.Context) {
 	pelouro.Name = input.Name
 	pelouro.Description = input.Description
 	pelouro.ResponsibleID = input.ResponsibleID
+	pelouro.Responsible = nil
 
 	if err := pelouroDao.Update(&pelouro); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})

@@ -139,12 +139,14 @@ func checkForecasts() {
 
 		result := util.ForecastTask(t.ID, t.Title, startVal, t.TargetValue, t.CurrentValue, *t.StartDate, *t.EndDate)
 		if result.Alert != nil {
-			// Notify CA users
+			// Notify CA and ADMIN users
 			caUsers, _ := userDao.GetByRole("CA")
-			for _, ca := range caUsers {
-				notifDao.CreateAndEmail(ca.ID, "Previsão de risco: "+t.Title,
+			adminUsers, _ := userDao.GetByRole("ADMIN")
+			allSuperUsers := append(caUsers, adminUsers...)
+			for _, su := range allSuperUsers {
+				notifDao.CreateAndEmail(su.ID, "Previsão de risco: "+t.Title,
 					*result.AlertMessage, "FORECAST_RISK", "task", &t.ID)
-				go util.EmailForecastRisk(ca.Email, ca.Name, t.Title, result.ProjectedFinalValue, t.TargetValue)
+				go util.EmailForecastRisk(su.Email, su.Name, t.Title, result.ProjectedFinalValue, t.TargetValue)
 			}
 		}
 	}
@@ -192,10 +194,12 @@ func checkOverdueMilestones() {
 			"O milestone '"+m.Title+"' está em atraso", "MILESTONE_OVERDUE", "milestone", &m.ID)
 		go util.EmailMilestoneOverdue(creator.Email, creator.Name, m.Title, taskTitle)
 
-		// Also notify CA
+		// Also notify CA and ADMIN
 		caUsers, _ := userDao.GetByRole("CA")
-		for _, ca := range caUsers {
-			notifDao.CreateAndEmail(ca.ID, "Milestone em atraso: "+m.Title,
+		adminUsers, _ := userDao.GetByRole("ADMIN")
+		allSuperUsers := append(caUsers, adminUsers...)
+		for _, su := range allSuperUsers {
+			notifDao.CreateAndEmail(su.ID, "Milestone em atraso: "+m.Title,
 				"O milestone '"+m.Title+"' está em atraso", "MILESTONE_OVERDUE", "milestone", &m.ID)
 		}
 	}
@@ -215,8 +219,9 @@ func RefreshAllNow() {
 // SeedInitialAdmin creates an admin user if none exists
 func SeedInitialAdmin() {
 	userDao := dao.UserDao{}
-	users, _ := userDao.GetByRole("CA")
-	if len(users) > 0 {
+	admins, _ := userDao.GetByRole("ADMIN")
+	caUsers, _ := userDao.GetByRole("CA")
+	if len(admins) > 0 || len(caUsers) > 0 {
 		return
 	}
 

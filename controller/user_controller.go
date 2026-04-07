@@ -13,6 +13,20 @@ import (
 
 type UserController struct{}
 
+// resolveDirectorScope returns "DIRECTION", "REGION", or "" for a DIRECAO user.
+// Used in both Login and /me so the frontend always receives the scope.
+func resolveDirectorScope(userID uint) string {
+	direcaoDao := dao.DirecaoDao{}
+	if _, err := direcaoDao.GetByResponsible(userID); err == nil {
+		return "DIRECTION"
+	}
+	geoDao := dao.GeoDao{}
+	if _, err := geoDao.GetRegiaoByResponsible(userID); err == nil {
+		return "REGION"
+	}
+	return ""
+}
+
 func (UserController) Me(c *gin.Context) {
 	userID := util.ExtractUserID(c)
 	userDao := dao.UserDao{}
@@ -21,13 +35,18 @@ func (UserController) Me(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
 		return
 	}
-	c.JSON(http.StatusOK, user.ToResponse())
+	resp := user.ToResponse()
+	if user.Role == "DIRECAO" {
+		resp.DirectorScope = resolveDirectorScope(userID)
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (UserController) List(c *gin.Context) {
 	params := util.ParsePagination(c)
+	role := c.Query("role")
 	userDao := dao.UserDao{}
-	users, total, err := userDao.List(params.Page, params.Limit)
+	users, total, err := userDao.List(params.Page, params.Limit, role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -43,8 +62,8 @@ func (UserController) List(c *gin.Context) {
 type CreateUserInput struct {
 	Name     string `json:"name" binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
-	Role     string `json:"role" binding:"required,oneof=CA PELOURO DIRECAO DEPARTAMENTO"`
+	Password string `json:"password" binding:"required,min=4"`
+	Role     string `json:"role" binding:"required,oneof=ADMIN CA PELOURO DIRECAO DEPARTAMENTO"`
 }
 
 func (UserController) Create(c *gin.Context) {

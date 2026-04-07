@@ -56,6 +56,57 @@ func (d *AuditDao) List(page, limit int, filters map[string]interface{}) ([]mode
 	return list, total, err
 }
 
+func (d *AuditDao) ListScoped(page, limit int, filters map[string]interface{}, scope *UserScope) ([]model.AuditLog, int64, error) {
+	if scope.IsGlobal {
+		return d.List(page, limit, filters)
+	}
+
+	// Non-global users see audit entries for entities within their scope
+	// Audit covers: project, task, milestone, blocker, pelouro, direcao, departamento
+	var list []model.AuditLog
+	var total int64
+
+	scopeWhere := `(
+		(entity_type = 'task' AND entity_id IN (?))
+		OR (entity_type = 'milestone' AND entity_id IN (SELECT id FROM milestones WHERE task_id IN (?)))
+		OR (entity_type = 'blocker' AND entity_id IN (SELECT id FROM blockers WHERE (entity_type = 'TASK' AND entity_id IN (?)) OR (entity_type = 'MILESTONE' AND entity_id IN (SELECT id FROM milestones WHERE task_id IN (?)))))
+		OR (entity_type = 'project' AND entity_id IN (?))
+		OR (entity_type = 'direcao' AND entity_id IN (?))
+		OR (entity_type = 'departamento' AND entity_id IN (?))
+		OR (entity_type = 'pelouro' AND entity_id IN (?))
+		OR changed_by = ?
+	)`
+
+	taskIDs := scope.TaskIDsSubquery()
+	projectIDs := Database.Model(&model.Project{})
+	projectIDs = scope.ApplyToProjects(projectIDs).Select("id")
+
+	args := []interface{}{
+		taskIDs, taskIDs, taskIDs, taskIDs,
+		projectIDs,
+		safeIDs(scope.DirecaoIDs),
+		safeIDs(scope.DepartamentoIDs),
+		safeIDs(scope.PelouroIDs),
+		scope.UserID,
+	}
+
+	q := Database.Model(&model.AuditLog{}).Where(scopeWhere, args...)
+	for k, v := range filters {
+		q = q.Where(k+" = ?", v)
+	}
+	q.Count(&total)
+
+	q2 := Database.Preload("Changer").Where(scopeWhere, args...)
+	for k, v := range filters {
+		q2 = q2.Where(k+" = ?", v)
+	}
+	if limit > 0 && page >= 0 {
+		q2 = q2.Offset(page * limit).Limit(limit)
+	}
+	err := q2.Order("created_at DESC").Find(&list).Error
+	return list, total, err
+}
+
 func (d *AuditDao) ListByEntity(entityType string, entityID uint, page, limit int) ([]model.AuditLog, int64, error) {
 	filters := map[string]interface{}{
 		"entity_type": entityType,

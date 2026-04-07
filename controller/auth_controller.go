@@ -47,9 +47,14 @@ func (AuthController) Login(c *gin.Context) {
 
 	userDao.UpdateLastLogin(user.ID)
 
+	userResp := user.ToResponse()
+	if user.Role == "DIRECAO" {
+		userResp.DirectorScope = resolveDirectorScope(user.ID)
+	}
+
 	c.JSON(http.StatusOK, LoginOutput{
 		Token: token,
-		User:  user.ToResponse(),
+		User:  userResp,
 	})
 }
 

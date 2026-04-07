@@ -227,8 +227,8 @@ Generates a `password_reset_token` (UUID), stores it + expiry (1h) in `users`, s
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /private/projects/:project_id/tasks | List tasks for project |
-| POST | /private/projects/:project_id/tasks | Create task |
+| GET | /private/tasks?project_id=X | List tasks for project |
+| POST | /private/tasks?project_id=X | Create task |
 | GET | /private/tasks/:id | Single task |
 | PUT | /private/tasks/:id | Update task (triggers notifications) |
 | DELETE | /private/tasks/:id | Soft delete |
@@ -266,8 +266,8 @@ Generates a `password_reset_token` (UUID), stores it + expiry (1h) in `users`, s
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /private/tasks/:task_id/milestones | List milestones |
-| POST | /private/tasks/:task_id/milestones | Create milestone |
+| GET | /private/milestones?task_id=X | List milestones for task |
+| POST | /private/milestones?task_id=X | Create milestone |
 | GET | /private/milestones/:id | Single |
 | PUT | /private/milestones/:id | Update (triggers task current_value recalc + notifications) |
 | DELETE | /private/milestones/:id | Soft delete |

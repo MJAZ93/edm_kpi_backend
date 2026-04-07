@@ -28,8 +28,9 @@ func (BlockerController) List(c *gin.Context) {
 		filters["status"] = st
 	}
 
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	blockerDao := dao.BlockerDao{}
-	list, total, err := blockerDao.List(params.Page, params.Limit, filters)
+	list, total, err := blockerDao.ListScoped(params.Page, params.Limit, filters, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -180,11 +181,13 @@ func notifyBlockerCreated(blocker model.Blocker, actorID uint) {
 	userDao := dao.UserDao{}
 	notifDao := dao.NotificationDao{}
 
-	// Notify superior users (CA always, and relevant pelouro/direcao)
+	// Notify superior users (CA + ADMIN always, and relevant pelouro/direcao)
 	caUsers, _ := userDao.GetByRole("CA")
-	for _, ca := range caUsers {
-		if ca.ID != actorID {
-			notifDao.CreateAndEmail(ca.ID, "Impedimento reportado",
+	adminUsers, _ := userDao.GetByRole("ADMIN")
+	allSuperUsers := append(caUsers, adminUsers...)
+	for _, su := range allSuperUsers {
+		if su.ID != actorID {
+			notifDao.CreateAndEmail(su.ID, "Impedimento reportado",
 				"Novo impedimento ("+blocker.BlockerType+"): "+blocker.Description,
 				"BLOCKER_CREATED", "blocker", &blocker.ID)
 		}
@@ -206,13 +209,11 @@ func notifyBlockerCreated(blocker model.Blocker, actorID uint) {
 		}
 	}
 
-	reporter, _ := userDao.GetByID(actorID)
-	for _, ca := range caUsers {
-		if ca.ID != actorID {
-			go util.EmailBlockerCreated(ca.Email, ca.Name, blocker.Description, taskTitle)
+	for _, su := range allSuperUsers {
+		if su.ID != actorID {
+			go util.EmailBlockerCreated(su.Email, su.Name, blocker.Description, taskTitle)
 		}
 	}
-	_ = reporter
 }
 
 func notifyBlockerResolved(blocker model.Blocker, status string) {

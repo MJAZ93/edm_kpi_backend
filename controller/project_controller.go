@@ -28,8 +28,22 @@ func (ProjectController) List(c *gin.Context) {
 		filters["status"] = st
 	}
 
+	// direcao_id filter: bypass normal scoped list and query via join table
+	if didStr := c.Query("direcao_id"); didStr != "" {
+		did, _ := strconv.Atoi(didStr)
+		projectDao := dao.ProjectDao{}
+		list, err := projectDao.ListByDirecao(uint(did))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, util.NewPaginatedResponse(list, int64(len(list)), params))
+		return
+	}
+
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	projectDao := dao.ProjectDao{}
-	list, total, err := projectDao.List(params.Page, params.Limit, filters)
+	list, total, err := projectDao.ListScoped(params.Page, params.Limit, filters, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -40,12 +54,13 @@ func (ProjectController) List(c *gin.Context) {
 type ProjectInput struct {
 	Title        string  `json:"title" binding:"required"`
 	Description  string  `json:"description"`
-	CreatorType  string  `json:"creator_type" binding:"required,oneof=CA PELOURO DIRECAO DEPARTAMENTO"`
+	CreatorType  string  `json:"creator_type" binding:"required,oneof=ADMIN CA PELOURO DIRECAO DEPARTAMENTO"`
 	CreatorOrgID *uint   `json:"creator_org_id"`
 	ParentID     *uint   `json:"parent_id"`
 	Weight       float64 `json:"weight"`
 	StartDate    *string `json:"start_date"`
 	EndDate      *string `json:"end_date"`
+	DirecaoIDs   []uint  `json:"direcao_ids"`
 }
 
 func (ProjectController) Create(c *gin.Context) {
@@ -84,6 +99,17 @@ func (ProjectController) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
 	}
+
+	// Associate direcoes (for CA / PELOURO level projects)
+	if len(input.DirecaoIDs) > 0 {
+		if err := projectDao.SetDirecoes(project.ID, input.DirecaoIDs); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+	}
+
+	// Reload with associations
+	project, _ = projectDao.GetByID(project.ID)
 
 	auditDao := dao.AuditDao{}
 	auditDao.Write("project", project.ID, util.ExtractUserID(c), "CREATE", nil, project, c.ClientIP())
@@ -141,6 +167,15 @@ func (ProjectController) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
 	}
+
+	// Replace direcoes association (empty slice clears all)
+	if err := projectDao.SetDirecoes(project.ID, input.DirecaoIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+
+	// Reload with associations
+	project, _ = projectDao.GetByID(project.ID)
 
 	auditDao := dao.AuditDao{}
 	auditDao.Write("project", project.ID, util.ExtractUserID(c), "UPDATE", oldData, project, c.ClientIP())

@@ -37,6 +37,12 @@ func (d *GeoDao) DeleteRegiao(id uint) error {
 	return Database.Delete(&model.Regiao{}, id).Error
 }
 
+func (d *GeoDao) GetRegiaoByResponsible(userID uint) (model.Regiao, error) {
+	var r model.Regiao
+	err := Database.Preload("Responsible").Where("responsible_id = ?", userID).First(&r).Error
+	return r, err
+}
+
 func (d *GeoDao) GetAllRegioes() ([]model.Regiao, error) {
 	var list []model.Regiao
 	err := Database.Preload("Responsible").Order("name ASC").Find(&list).Error

@@ -16,6 +16,22 @@ type MilestoneController struct{}
 func (MilestoneController) ListByTask(c *gin.Context) {
 	taskID, _ := strconv.Atoi(c.Query("task_id"))
 	params := util.ParsePagination(c)
+
+	// Verify the task is within user's scope
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
+	if !scope.IsGlobal {
+		taskDao := dao.TaskDao{}
+		task, err := taskDao.GetByID(uint(taskID))
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+			return
+		}
+		if !scope.CanSeeTask(task) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "task outside your scope"})
+			return
+		}
+	}
+
 	milestoneDao := dao.MilestoneDao{}
 	list, total, err := milestoneDao.ListByTask(uint(taskID), params.Page, params.Limit)
 	if err != nil {
@@ -33,6 +49,7 @@ type MilestoneInput struct {
 	PlannedValue float64 `json:"planned_value" binding:"required"`
 	PlannedDate  string  `json:"planned_date" binding:"required"`
 	Notes        string  `json:"notes"`
+	AssignedTo   *uint   `json:"assigned_to"`
 }
 
 func (MilestoneController) Create(c *gin.Context) {
@@ -59,6 +76,7 @@ func (MilestoneController) Create(c *gin.Context) {
 		PlannedValue: input.PlannedValue,
 		PlannedDate:  *plannedDate,
 		Notes:        input.Notes,
+		AssignedTo:   input.AssignedTo,
 		Status:       "PENDING",
 		CreatedBy:    util.ExtractUserID(c),
 	}
@@ -94,6 +112,7 @@ type MilestoneUpdateInput struct {
 	Title         *string  `json:"title"`
 	PlannedValue  *float64 `json:"planned_value"`
 	PlannedDate   *string  `json:"planned_date"`
+	AssignedTo    *uint    `json:"assigned_to"`
 }
 
 func (MilestoneController) Update(c *gin.Context) {
@@ -137,6 +156,9 @@ func (MilestoneController) Update(c *gin.Context) {
 		if t != nil {
 			milestone.PlannedDate = *t
 		}
+	}
+	if input.AssignedTo != nil {
+		milestone.AssignedTo = input.AssignedTo
 	}
 
 	userID := util.ExtractUserID(c)
@@ -219,4 +241,86 @@ func (MilestoneController) UploadPhoto(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"photo_url": url})
+}
+
+// AddProgress records an incremental progress event and accumulates into achieved_value.
+func (MilestoneController) AddProgress(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	userID := util.ExtractUserID(c)
+
+	var input struct {
+		IncrementValue float64 `json:"increment_value" binding:"required,min=0.01"`
+		Notes          string  `json:"notes"`
+		Status         string  `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
+
+	milestoneDao := dao.MilestoneDao{}
+	ms, err := milestoneDao.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+		return
+	}
+
+	// Record the progress event
+	progress := model.MilestoneProgress{
+		MilestoneID:    uint(id),
+		UserID:         userID,
+		IncrementValue: input.IncrementValue,
+		Notes:          input.Notes,
+	}
+	if err := dao.Database.Create(&progress).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+
+	// Accumulate achieved_value
+	ms.AchievedValue += input.IncrementValue
+	ms.UpdatedBy = &userID
+
+	// Update status if provided
+	if input.Status != "" {
+		ms.Status = input.Status
+	} else if ms.AchievedValue >= ms.PlannedValue {
+		ms.Status = "DONE"
+	}
+
+	if err := milestoneDao.Update(&ms); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+
+	// Recalculate parent task current_value (sum of all milestone achieved_values)
+	taskDao := dao.TaskDao{}
+	taskDao.RecalcCurrentValue(ms.TaskID)
+
+	// Refresh performance cache asynchronously
+	perfDao := dao.PerformanceDao{}
+	go perfDao.RefreshForTask(ms.TaskID)
+
+	// Notify up the chain
+	task, _ := taskDao.GetByID(ms.TaskID)
+	go notifyTaskUpdateChain(task, userID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"milestone":      ms,
+		"progress_event": progress,
+		"new_total":      ms.AchievedValue,
+	})
+}
+
+// ListProgress returns all progress events for a milestone.
+func (MilestoneController) ListProgress(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+
+	var events []model.MilestoneProgress
+	dao.Database.Preload("User").
+		Where("milestone_id = ?", id).
+		Order("created_at DESC").
+		Find(&events)
+
+	c.JSON(http.StatusOK, gin.H{"events": events, "total": len(events)})
 }

@@ -46,3 +46,27 @@ func (s DashboardService) Distribution(r *gin.RouterGroup, route string) {
 func (s DashboardService) Benchmark(r *gin.RouterGroup, route string) {
 	r.GET("/"+s.Route+"/"+route, s.Controller.Benchmark)
 }
+
+func (s DashboardService) ScopeStats(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.ScopeStats)
+}
+
+func (s DashboardService) EmployeeRanking(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.EmployeeRanking)
+}
+
+func (s DashboardService) DirecaoOverview(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.DirecaoOverview)
+}
+
+func (s DashboardService) DepartamentoOverview(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.DepartamentoOverview)
+}
+
+func (s DashboardService) MemberOverview(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.MemberOverview)
+}
+
+func (s DashboardService) RegionalOverview(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.RegionalOverview)
+}

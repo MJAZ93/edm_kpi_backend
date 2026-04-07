@@ -34,3 +34,11 @@ func (s MilestoneService) Delete(r *gin.RouterGroup, _ string) {
 func (s MilestoneService) UploadPhoto(r *gin.RouterGroup, _ string) {
 	r.POST("/"+s.Route+"/:id/photo", s.Controller.UploadPhoto)
 }
+
+func (s MilestoneService) AddProgress(r *gin.RouterGroup, _ string) {
+	r.POST("/"+s.Route+"/:id/progress", s.Controller.AddProgress)
+}
+
+func (s MilestoneService) ListProgress(r *gin.RouterGroup, _ string) {
+	r.GET("/"+s.Route+"/:id/progress", s.Controller.ListProgress)
+}

@@ -40,6 +40,40 @@ func (d *BlockerDao) List(page, limit int, filters map[string]interface{}) ([]mo
 	return list, total, err
 }
 
+func (d *BlockerDao) ListScoped(page, limit int, filters map[string]interface{}, scope *UserScope) ([]model.Blocker, int64, error) {
+	var list []model.Blocker
+	var total int64
+
+	q := Database.Model(&model.Blocker{})
+	for k, v := range filters {
+		q = q.Where(k+" = ?", v)
+	}
+	if !scope.IsGlobal {
+		// Blockers are on tasks or milestones; filter by visible task IDs
+		q = q.Where(
+			"(entity_type = 'TASK' AND entity_id IN (?)) OR (entity_type = 'MILESTONE' AND entity_id IN (SELECT id FROM milestones WHERE task_id IN (?)))",
+			scope.TaskIDsSubquery(), scope.TaskIDsSubquery(),
+		)
+	}
+	q.Count(&total)
+
+	q2 := Database.Preload("Reporter").Preload("Approver")
+	for k, v := range filters {
+		q2 = q2.Where(k+" = ?", v)
+	}
+	if !scope.IsGlobal {
+		q2 = q2.Where(
+			"(entity_type = 'TASK' AND entity_id IN (?)) OR (entity_type = 'MILESTONE' AND entity_id IN (SELECT id FROM milestones WHERE task_id IN (?)))",
+			scope.TaskIDsSubquery(), scope.TaskIDsSubquery(),
+		)
+	}
+	if limit > 0 && page >= 0 {
+		q2 = q2.Offset(page * limit).Limit(limit)
+	}
+	err := q2.Order("created_at DESC").Find(&list).Error
+	return list, total, err
+}
+
 func (d *BlockerDao) Approve(id, approvedBy uint) error {
 	now := time.Now()
 	return Database.Model(&model.Blocker{}).Where("id = ?", id).Updates(map[string]interface{}{

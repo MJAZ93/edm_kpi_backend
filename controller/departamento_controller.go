@@ -15,8 +15,9 @@ type DepartamentoController struct{}
 
 func (DepartamentoController) List(c *gin.Context) {
 	params := util.ParsePagination(c)
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	deptDao := dao.DepartamentoDao{}
-	list, total, err := deptDao.List(params.Page, params.Limit)
+	list, total, err := deptDao.ListScoped(params.Page, params.Limit, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -90,6 +91,8 @@ func (DepartamentoController) Update(c *gin.Context) {
 	dept.Description = input.Description
 	dept.DirecaoID = input.DirecaoID
 	dept.ResponsibleID = input.ResponsibleID
+	dept.Responsible = nil
+	dept.Direcao = nil
 
 	if err := deptDao.Update(&dept); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})

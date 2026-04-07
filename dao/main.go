@@ -33,8 +33,6 @@ func SetupExtensions() {
 }
 
 func SetupIndexes() {
-	Database.Exec("CREATE INDEX IF NOT EXISTS idx_regioes_polygon ON regioes USING GIST(polygon);")
-	Database.Exec("CREATE INDEX IF NOT EXISTS idx_ascs_polygon ON ascs USING GIST(polygon);")
 	Database.Exec("CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);")
 	Database.Exec("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);")
 	Database.Exec("CREATE INDEX IF NOT EXISTS idx_performance_cache_entity ON performance_caches(entity_type, entity_id, period);")

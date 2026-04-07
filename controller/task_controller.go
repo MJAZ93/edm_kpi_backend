@@ -16,8 +16,9 @@ type TaskController struct{}
 func (TaskController) ListByProject(c *gin.Context) {
 	projectID, _ := strconv.Atoi(c.Query("project_id"))
 	params := util.ParsePagination(c)
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	taskDao := dao.TaskDao{}
-	list, total, err := taskDao.ListByProject(uint(projectID), params.Page, params.Limit)
+	list, total, err := taskDao.ListByProjectScoped(uint(projectID), params.Page, params.Limit, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -282,13 +283,15 @@ func notifyTaskUpdateChain(task model.Task, actorID uint) {
 		}
 	}
 
-	// Always notify CA users
+	// Always notify CA and ADMIN users
 	caUsers, _ := userDao.GetByRole("CA")
-	for _, ca := range caUsers {
-		if ca.ID != actorID {
-			notifDao.CreateAndEmail(ca.ID, "Tarefa actualizada",
+	adminUsers, _ := userDao.GetByRole("ADMIN")
+	allSuperUsers := append(caUsers, adminUsers...)
+	for _, su := range allSuperUsers {
+		if su.ID != actorID {
+			notifDao.CreateAndEmail(su.ID, "Tarefa actualizada",
 				"A tarefa '"+task.Title+"' foi actualizada", "TASK_UPDATE", "task", &task.ID)
-			go util.EmailTaskUpdated(ca.Email, ca.Name, task.Title, actor.Name)
+			go util.EmailTaskUpdated(su.Email, su.Name, task.Title, actor.Name)
 		}
 	}
 }

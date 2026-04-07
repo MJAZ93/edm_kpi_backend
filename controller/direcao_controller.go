@@ -15,8 +15,9 @@ type DirecaoController struct{}
 
 func (DirecaoController) List(c *gin.Context) {
 	params := util.ParsePagination(c)
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	direcaoDao := dao.DirecaoDao{}
-	list, total, err := direcaoDao.List(params.Page, params.Limit)
+	list, total, err := direcaoDao.ListScoped(params.Page, params.Limit, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -90,6 +91,8 @@ func (DirecaoController) Update(c *gin.Context) {
 	direcao.Description = input.Description
 	direcao.PelouroID = input.PelouroID
 	direcao.ResponsibleID = input.ResponsibleID
+	direcao.Responsible = nil
+	direcao.Pelouro = nil
 
 	if err := direcaoDao.Update(&direcao); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})

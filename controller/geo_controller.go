@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -27,10 +28,10 @@ func (GeoController) ListRegioes(c *gin.Context) {
 }
 
 type RegiaoInput struct {
-	Name          string `json:"name" binding:"required"`
-	Code          string `json:"code"`
-	Polygon       string `json:"polygon"`
-	ResponsibleID *uint  `json:"responsible_id"`
+	Name          string          `json:"name" binding:"required"`
+	Code          string          `json:"code"`
+	Polygon       json.RawMessage `json:"polygon"`
+	ResponsibleID *uint           `json:"responsible_id"`
 }
 
 func (GeoController) CreateRegiao(c *gin.Context) {
@@ -40,10 +41,15 @@ func (GeoController) CreateRegiao(c *gin.Context) {
 		return
 	}
 
+	polygonStr := ""
+	if len(input.Polygon) > 0 {
+		polygonStr = string(input.Polygon)
+	}
+
 	regiao := model.Regiao{
 		Name:          input.Name,
 		Code:          input.Code,
-		Polygon:       input.Polygon,
+		Polygon:       polygonStr,
 		ResponsibleID: input.ResponsibleID,
 	}
 
@@ -87,9 +93,14 @@ func (GeoController) UpdateRegiao(c *gin.Context) {
 		return
 	}
 
+	polygonStr := ""
+	if len(input.Polygon) > 0 {
+		polygonStr = string(input.Polygon)
+	}
+
 	regiao.Name = input.Name
 	regiao.Code = input.Code
-	regiao.Polygon = input.Polygon
+	regiao.Polygon = polygonStr
 	regiao.ResponsibleID = input.ResponsibleID
 
 	if err := geoDao.UpdateRegiao(&regiao); err != nil {
@@ -138,12 +149,12 @@ func (GeoController) ListASCs(c *gin.Context) {
 }
 
 type ASCInput struct {
-	Name          string `json:"name" binding:"required"`
-	Code          string `json:"code"`
-	RegiaoID      *uint  `json:"regiao_id"`
-	Polygon       string `json:"polygon"`
-	ResponsibleID *uint  `json:"responsible_id"`
-	DirectorID    *uint  `json:"director_id"`
+	Name          string          `json:"name" binding:"required"`
+	Code          string          `json:"code"`
+	RegiaoID      *uint           `json:"regiao_id"`
+	Polygon       json.RawMessage `json:"polygon"`
+	ResponsibleID *uint           `json:"responsible_id"`
+	DirectorID    *uint           `json:"director_id"`
 }
 
 func (GeoController) CreateASC(c *gin.Context) {
@@ -153,11 +164,16 @@ func (GeoController) CreateASC(c *gin.Context) {
 		return
 	}
 
+	ascPolygonStr := ""
+	if len(input.Polygon) > 0 {
+		ascPolygonStr = string(input.Polygon)
+	}
+
 	asc := model.ASC{
 		Name:          input.Name,
 		Code:          input.Code,
 		RegiaoID:      input.RegiaoID,
-		Polygon:       input.Polygon,
+		Polygon:       ascPolygonStr,
 		ResponsibleID: input.ResponsibleID,
 		DirectorID:    input.DirectorID,
 	}
@@ -202,10 +218,15 @@ func (GeoController) UpdateASC(c *gin.Context) {
 		return
 	}
 
+	updatePolygonStr := ""
+	if len(input.Polygon) > 0 {
+		updatePolygonStr = string(input.Polygon)
+	}
+
 	asc.Name = input.Name
 	asc.Code = input.Code
 	asc.RegiaoID = input.RegiaoID
-	asc.Polygon = input.Polygon
+	asc.Polygon = updatePolygonStr
 	asc.ResponsibleID = input.ResponsibleID
 	asc.DirectorID = input.DirectorID
 

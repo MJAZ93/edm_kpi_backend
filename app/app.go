@@ -36,6 +36,7 @@ func LoadDatabase() error {
 		&model.Task{},
 		&model.TaskScope{},
 		&model.Milestone{},
+		&model.MilestoneProgress{},
 		&model.Blocker{},
 		&model.AuditLog{},
 		&model.Notification{},

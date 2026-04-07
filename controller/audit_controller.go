@@ -22,8 +22,9 @@ func (AuditController) List(c *gin.Context) {
 		filters["entity_id"] = eid
 	}
 
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
 	auditDao := dao.AuditDao{}
-	list, total, err := auditDao.List(params.Page, params.Limit, filters)
+	list, total, err := auditDao.ListScoped(params.Page, params.Limit, filters, &scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return

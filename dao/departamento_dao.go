@@ -27,6 +27,31 @@ func (d *DepartamentoDao) List(page, limit int) ([]model.Departamento, int64, er
 	return list, total, err
 }
 
+func (d *DepartamentoDao) ListScoped(page, limit int, scope *UserScope) ([]model.Departamento, int64, error) {
+	var list []model.Departamento
+	var total int64
+
+	q := Database.Model(&model.Departamento{})
+	if !scope.IsGlobal && len(scope.DepartamentoIDs) > 0 {
+		q = q.Where("id IN ?", scope.DepartamentoIDs)
+	} else if !scope.IsGlobal {
+		q = q.Where("id IN ?", []uint{0})
+	}
+	q.Count(&total)
+
+	q2 := Database.Preload("Responsible").Preload("Direcao")
+	if !scope.IsGlobal && len(scope.DepartamentoIDs) > 0 {
+		q2 = q2.Where("id IN ?", scope.DepartamentoIDs)
+	} else if !scope.IsGlobal {
+		q2 = q2.Where("id IN ?", []uint{0})
+	}
+	if limit > 0 && page >= 0 {
+		q2 = q2.Offset(page * limit).Limit(limit)
+	}
+	err := q2.Order("name ASC").Find(&list).Error
+	return list, total, err
+}
+
 func (d *DepartamentoDao) ListByDirecao(direcaoID uint) ([]model.Departamento, error) {
 	var list []model.Departamento
 	err := Database.Preload("Responsible").Where("direcao_id = ?", direcaoID).Order("name ASC").Find(&list).Error

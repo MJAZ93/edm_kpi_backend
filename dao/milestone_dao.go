@@ -13,7 +13,7 @@ func (d *MilestoneDao) Create(m *model.Milestone) error {
 
 func (d *MilestoneDao) GetByID(id uint) (model.Milestone, error) {
 	var m model.Milestone
-	err := Database.Preload("Creator").Preload("Updater").Preload("Task").Where("id = ?", id).First(&m).Error
+	err := Database.Preload("Creator").Preload("Updater").Preload("Assignee").Preload("Task").Where("id = ?", id).First(&m).Error
 	return m, err
 }
 
@@ -22,7 +22,7 @@ func (d *MilestoneDao) ListByTask(taskID uint, page, limit int) ([]model.Milesto
 	var total int64
 
 	Database.Model(&model.Milestone{}).Where("task_id = ?", taskID).Count(&total)
-	q := Database.Preload("Creator").Where("task_id = ?", taskID)
+	q := Database.Preload("Creator").Preload("Assignee").Where("task_id = ?", taskID)
 	if limit > 0 && page >= 0 {
 		q = q.Offset(page * limit).Limit(limit)
 	}

@@ -25,4 +25,6 @@ type Milestone struct {
 	Creator       *User      `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
 	UpdatedBy     *uint      `json:"updated_by,omitempty"`
 	Updater       *User      `gorm:"foreignKey:UpdatedBy" json:"updater,omitempty"`
+	AssignedTo    *uint      `json:"assigned_to,omitempty"`
+	Assignee      *User      `gorm:"foreignKey:AssignedTo" json:"assignee,omitempty"`
 }

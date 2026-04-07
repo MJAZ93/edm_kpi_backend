@@ -27,6 +27,31 @@ func (d *PelouroDao) List(page, limit int) ([]model.Pelouro, int64, error) {
 	return list, total, err
 }
 
+func (d *PelouroDao) ListScoped(page, limit int, scope *UserScope) ([]model.Pelouro, int64, error) {
+	var list []model.Pelouro
+	var total int64
+
+	q := Database.Model(&model.Pelouro{})
+	if !scope.IsGlobal && len(scope.PelouroIDs) > 0 {
+		q = q.Where("id IN ?", scope.PelouroIDs)
+	} else if !scope.IsGlobal {
+		q = q.Where("id IN ?", []uint{0})
+	}
+	q.Count(&total)
+
+	q2 := Database.Preload("Responsible")
+	if !scope.IsGlobal && len(scope.PelouroIDs) > 0 {
+		q2 = q2.Where("id IN ?", scope.PelouroIDs)
+	} else if !scope.IsGlobal {
+		q2 = q2.Where("id IN ?", []uint{0})
+	}
+	if limit > 0 && page >= 0 {
+		q2 = q2.Offset(page * limit).Limit(limit)
+	}
+	err := q2.Order("name ASC").Find(&list).Error
+	return list, total, err
+}
+
 func (d *PelouroDao) Update(p *model.Pelouro) error {
 	return Database.Save(p).Error
 }

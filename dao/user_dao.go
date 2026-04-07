@@ -37,13 +37,16 @@ func (d *UserDao) GetByEmailAndPassword(email, password string) (model.User, err
 	return u, nil
 }
 
-func (d *UserDao) List(page, limit int) ([]model.User, int64, error) {
+func (d *UserDao) List(page, limit int, role string) ([]model.User, int64, error) {
 	var list []model.User
 	var total int64
 
-	Database.Model(&model.User{}).Count(&total)
+	q := Database.Model(&model.User{})
+	if role != "" {
+		q = q.Where("role = ?", role)
+	}
+	q.Count(&total)
 
-	q := Database
 	if limit > 0 && page >= 0 {
 		q = q.Offset(page * limit).Limit(limit)
 	}

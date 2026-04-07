@@ -95,6 +95,8 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	milestoneSvc.Update(r, "")
 	milestoneSvc.Delete(r, "")
 	milestoneSvc.UploadPhoto(r, "")
+	milestoneSvc.AddProgress(r, "")
+	milestoneSvc.ListProgress(r, "")
 
 	// Blockers
 	blockerSvc := service.BlockerService{Route: "blockers", Controller: controller.BlockerController{}}
@@ -115,6 +117,12 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	dashSvc.Timeline(r, "timeline")
 	dashSvc.Distribution(r, "distribution")
 	dashSvc.Benchmark(r, "benchmark")
+	dashSvc.ScopeStats(r, "scope-stats")
+	dashSvc.EmployeeRanking(r, "employee-ranking")
+	dashSvc.DirecaoOverview(r, "direcao-overview")
+	dashSvc.DepartamentoOverview(r, "departamento-overview")
+	dashSvc.MemberOverview(r, "member-overview")
+	dashSvc.RegionalOverview(r, "regional-overview")
 
 	// Notifications
 	notifSvc := service.NotificationService{Route: "notifications", Controller: controller.NotificationController{}}

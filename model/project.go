@@ -22,4 +22,5 @@ type Project struct {
 	StartDate    *time.Time `json:"start_date,omitempty"`
 	EndDate      *time.Time `json:"end_date,omitempty"`
 	Tasks        []Task     `gorm:"foreignKey:ProjectID" json:"tasks,omitempty"`
+	Direcoes     []Direcao  `gorm:"many2many:project_direcoes;" json:"direcoes,omitempty"`
 }

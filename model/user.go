@@ -12,7 +12,7 @@ type User struct {
 	Name                 string     `gorm:"not null;size:128" json:"name"`
 	Email                string     `gorm:"not null;size:255;uniqueIndex" json:"email"`
 	Password             string     `gorm:"not null;size:255" json:"-"`
-	Role                 string     `gorm:"not null;size:20" json:"role"` // CA, PELOURO, DIRECAO, DEPARTAMENTO
+	Role                 string     `gorm:"not null;size:20" json:"role"` // ADMIN, CA, PELOURO, DIRECAO, DEPARTAMENTO
 	Active               bool       `gorm:"default:true" json:"active"`
 	PasswordResetToken   string     `gorm:"size:255" json:"-"`
 	PasswordResetExpires *time.Time `json:"-"`
@@ -35,13 +35,18 @@ func (u *User) BeforeSave(tx *gorm.DB) error {
 }
 
 type UserResponse struct {
-	ID        uint       `json:"id"`
-	Name      string     `json:"name"`
-	Email     string     `json:"email"`
-	Role      string     `json:"role"`
-	Active    bool       `json:"active"`
-	LastLogin *time.Time `json:"last_login,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID            uint       `json:"id"`
+	Name          string     `json:"name"`
+	Email         string     `json:"email"`
+	Role          string     `json:"role"`
+	Active        bool       `json:"active"`
+	LastLogin     *time.Time `json:"last_login,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	// DirectorScope is only set for DIRECAO role users:
+	// "DIRECTION" — responsible for a Direcção (full write access)
+	// "REGION"    — responsible for a Região only (read-only)
+	// ""          — not configured as responsible for anything
+	DirectorScope string     `json:"director_scope,omitempty"`
 }
 
 func (u *User) ToResponse() UserResponse {
