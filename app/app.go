@@ -77,6 +77,11 @@ func ServeApplication() {
 	// Start background jobs
 	jobs.StartScheduler()
 
+	// Seed performance cache on startup (non-blocking)
+	go func() {
+		jobs.RefreshAllNow()
+	}()
+
 	ip, port := os.Getenv("IP"), os.Getenv("PORT")
 	log.Printf("Starting KPI Platform on %s:%s", ip, port)
 	if err := r.Run(fmt.Sprintf("%s:%s", ip, port)); err != nil {

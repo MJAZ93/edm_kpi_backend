@@ -84,6 +84,7 @@ func performanceCacheJob() {
 func refreshAllPerformanceScores() {
 	taskDao := dao.TaskDao{}
 	perfDao := dao.PerformanceDao{}
+	projectDao := dao.ProjectDao{}
 
 	tasks, err := taskDao.ListActive()
 	if err != nil {
@@ -91,9 +92,28 @@ func refreshAllPerformanceScores() {
 		return
 	}
 
+	// Refresh per-task-owner caches
 	for _, t := range tasks {
 		if err := perfDao.RefreshForTask(t.ID); err != nil {
 			log.Printf("[PERF-CACHE] Error refreshing task %d: %v", t.ID, err)
+		}
+	}
+
+	// Refresh project-level caches — collect unique project IDs from active tasks
+	seen := map[uint]bool{}
+	for _, t := range tasks {
+		if t.ProjectID != 0 && !seen[t.ProjectID] {
+			seen[t.ProjectID] = true
+		}
+	}
+	// Also grab any projects that have no tasks yet
+	allProjects, _, _ := projectDao.List(0, 0, map[string]interface{}{"status": "ACTIVE"})
+	for _, p := range allProjects {
+		seen[p.ID] = true
+	}
+	for pid := range seen {
+		if err := perfDao.RefreshForProject(pid); err != nil {
+			log.Printf("[PERF-CACHE] Error refreshing project %d: %v", pid, err)
 		}
 	}
 }

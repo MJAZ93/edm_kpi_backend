@@ -34,3 +34,7 @@ func (s ProjectService) Delete(r *gin.RouterGroup, _ string) {
 func (s ProjectService) Tree(r *gin.RouterGroup, _ string) {
 	r.GET("/"+s.Route+"/:id/tree", s.Controller.Tree)
 }
+
+func (s ProjectService) UpdateProgress(r *gin.RouterGroup, _ string) {
+	r.PATCH("/"+s.Route+"/:id/progress", s.Controller.UpdateProgress)
+}

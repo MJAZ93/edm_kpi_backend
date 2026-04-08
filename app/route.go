@@ -78,6 +78,7 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	projectSvc.Update(r, "")
 	projectSvc.Delete(r, "")
 	projectSvc.Tree(r, "")
+	projectSvc.UpdateProgress(r, "")
 
 	// Tasks
 	taskSvc := service.TaskService{Route: "tasks", Controller: controller.TaskController{}}

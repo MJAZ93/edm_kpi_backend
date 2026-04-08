@@ -947,6 +947,89 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		})
 	}
 
+	// ── Direction's own tasks (owner_type = DIRECAO) with milestone progress ──
+	// These are tasks the director can update directly (not dept-owned tasks).
+	taskDao := dao.TaskDao{}
+	dirTasks, _ := taskDao.ListByOwner("DIRECAO", dir.ID)
+
+	type MsProgress struct {
+		ID            uint      `json:"id"`
+		Title         string    `json:"title"`
+		Status        string    `json:"status"`
+		PlannedDate   time.Time `json:"planned_date"`
+		PlannedValue  float64   `json:"planned_value"`
+		AchievedValue float64   `json:"achieved_value"`
+		ScopeType     string    `json:"scope_type,omitempty"`
+		ScopeID       *uint     `json:"scope_id,omitempty"`
+		ScopeName     string    `json:"scope_name,omitempty"`
+	}
+	type DirTask struct {
+		ID           uint         `json:"id"`
+		Title        string       `json:"title"`
+		ProjectTitle string       `json:"project_title"`
+		ProgressPct  float64      `json:"progress_pct"`
+		Milestones   []MsProgress `json:"milestones"`
+	}
+	dirTaskItems := make([]DirTask, 0, len(dirTasks))
+	for _, t := range dirTasks {
+		// Determine project title
+		var projTitle string
+		if t.ProjectID != 0 {
+			var p model.Project
+			if err := dao.Database.Select("title").First(&p, t.ProjectID).Error; err == nil {
+				projTitle = p.Title
+			}
+		}
+		// Compute progress %
+		startVal := float64(0)
+		if t.StartValue != nil {
+			startVal = *t.StartValue
+		}
+		pct := float64(0)
+		if denom := t.TargetValue - startVal; denom > 0 {
+			pct = math.Round(((t.CurrentValue-startVal)/denom)*1000) / 10
+			if pct > 100 {
+				pct = 100
+			}
+		}
+		// Milestones for this task
+		milestoneDao := dao.MilestoneDao{}
+		msList, _, _ := milestoneDao.ListByTask(t.ID, 0, 0)
+		msItems := make([]MsProgress, 0, len(msList))
+		for _, m := range msList {
+			item := MsProgress{
+				ID:            m.ID,
+				Title:         m.Title,
+				Status:        m.Status,
+				PlannedDate:   m.PlannedDate,
+				PlannedValue:  m.PlannedValue,
+				AchievedValue: m.AchievedValue,
+				ScopeType:     m.ScopeType,
+				ScopeID:       m.ScopeID,
+			}
+			// Resolve scope name for display
+			if m.ScopeType == "ASC" && m.ScopeID != nil {
+				var asc model.ASC
+				if dao.Database.Select("name").First(&asc, *m.ScopeID).Error == nil {
+					item.ScopeName = asc.Name
+				}
+			} else if m.ScopeType == "REGIAO" && m.ScopeID != nil {
+				var reg model.Regiao
+				if dao.Database.Select("name").First(&reg, *m.ScopeID).Error == nil {
+					item.ScopeName = reg.Name
+				}
+			}
+			msItems = append(msItems, item)
+		}
+		dirTaskItems = append(dirTaskItems, DirTask{
+			ID:           t.ID,
+			Title:        t.Title,
+			ProjectTitle: projTitle,
+			ProgressPct:  pct,
+			Milestones:   msItems,
+		})
+	}
+
 	// ── Director's personal score ────────────────────────────────────────────
 	myScore := perfDao.ScoreForUser(userID)
 
@@ -968,6 +1051,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 			"ms_done":         myScore.MsDone,
 		},
 		"projects":         projItems,
+		"dir_tasks":        dirTaskItems,
 		"stalled_tasks":    stalledTasks,
 		"pending_blockers": blockerItems,
 		"dept_scores":      deptScores,
@@ -1516,20 +1600,22 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 	msBlocked := countMs("BLOCKED")
 
 	// ── Milestones: fetch recent milestones scoped to this region or its ASCs ──
+	// NOTE: PlannedDate must be time.Time — scanning a TIMESTAMPTZ into string fails.
+	// AchievedValue must be float64 (non-pointer) matching the DB column default 0.
 	type MilestoneItem struct {
-		ID             uint    `json:"id"`
-		Title          string  `json:"title"`
-		Status         string  `json:"status"`
-		PlannedDate    string  `json:"planned_date"`
-		PlannedValue   float64 `json:"planned_value"`
-		AchievedValue  *float64 `json:"achieved_value,omitempty"`
-		ScopeType      string  `json:"scope_type"`
-		ScopeID        uint    `json:"scope_id"`
-		ScopeName      string  `json:"scope_name,omitempty"`
-		TaskID         uint    `json:"task_id"`
-		TaskTitle      string  `json:"task_title"`
-		ProjectID      uint    `json:"project_id"`
-		ProjectTitle   string  `json:"project_title"`
+		ID            uint      `json:"id"`
+		Title         string    `json:"title"`
+		Status        string    `json:"status"`
+		PlannedDate   time.Time `json:"planned_date"`
+		PlannedValue  float64   `json:"planned_value"`
+		AchievedValue float64   `json:"achieved_value"`
+		ScopeType     string    `json:"scope_type"`
+		ScopeID       uint      `json:"scope_id"`
+		ScopeName     string    `json:"scope_name,omitempty"`
+		TaskID        uint      `json:"task_id"`
+		TaskTitle     string    `json:"task_title"`
+		ProjectID     uint      `json:"project_id"`
+		ProjectTitle  string    `json:"project_title"`
 	}
 
 	var milestones []MilestoneItem

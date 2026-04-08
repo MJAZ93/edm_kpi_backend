@@ -23,4 +23,11 @@ type Project struct {
 	EndDate      *time.Time `json:"end_date,omitempty"`
 	Tasks        []Task     `gorm:"foreignKey:ProjectID" json:"tasks,omitempty"`
 	Direcoes     []Direcao  `gorm:"many2many:project_direcoes;" json:"direcoes,omitempty"`
+
+	// KPI / objective tracking (optional — only set when project has a measurable goal)
+	GoalLabel    string   `gorm:"size:255" json:"goal_label,omitempty"`          // e.g. "Perdas comerciais"
+	Frequency    string   `gorm:"size:20" json:"frequency,omitempty"`            // DAILY,WEEKLY,MONTHLY,QUARTERLY,BIANNUAL,ANNUAL
+	StartValue   *float64 `gorm:"type:decimal(15,4)" json:"start_value,omitempty"` // baseline at project start
+	TargetValue  *float64 `gorm:"type:decimal(15,4)" json:"target_value,omitempty"` // goal to reach
+	CurrentValue *float64 `gorm:"type:decimal(15,4)" json:"current_value,omitempty"` // latest reported value
 }

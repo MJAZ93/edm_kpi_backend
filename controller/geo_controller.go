@@ -17,14 +17,13 @@ type GeoController struct{}
 // --- Regiões ---
 
 func (GeoController) ListRegioes(c *gin.Context) {
-	params := util.ParsePagination(c)
 	geoDao := dao.GeoDao{}
-	list, total, err := geoDao.ListRegioes(params.Page, params.Limit)
+	list, err := geoDao.GetAllRegioes()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
 	}
-	c.JSON(http.StatusOK, util.NewPaginatedResponse(list, total, params))
+	c.JSON(http.StatusOK, gin.H{"data": list, "total": len(list)})
 }
 
 type RegiaoInput struct {
@@ -138,14 +137,13 @@ func (GeoController) DeleteRegiao(c *gin.Context) {
 // --- ASCs ---
 
 func (GeoController) ListASCs(c *gin.Context) {
-	params := util.ParsePagination(c)
 	geoDao := dao.GeoDao{}
-	list, total, err := geoDao.ListASCs(params.Page, params.Limit)
+	list, err := geoDao.GetAllASCs()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
 	}
-	c.JSON(http.StatusOK, util.NewPaginatedResponse(list, total, params))
+	c.JSON(http.StatusOK, gin.H{"data": list, "total": len(list)})
 }
 
 type ASCInput struct {

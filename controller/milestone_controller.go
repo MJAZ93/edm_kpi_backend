@@ -173,12 +173,15 @@ func (MilestoneController) Update(c *gin.Context) {
 	taskDao := dao.TaskDao{}
 	taskDao.RecalcCurrentValue(milestone.TaskID)
 
-	// Refresh performance cache
+	// Refresh performance cache: task owner + project-level
 	perfDao := dao.PerformanceDao{}
 	go perfDao.RefreshForTask(milestone.TaskID)
 
 	// Notify up the chain
 	task, _ := taskDao.GetByID(milestone.TaskID)
+	if task.ProjectID != 0 {
+		go perfDao.RefreshForProject(task.ProjectID)
+	}
 	go notifyTaskUpdateChain(task, userID)
 
 	auditDao := dao.AuditDao{}

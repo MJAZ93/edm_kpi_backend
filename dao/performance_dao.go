@@ -119,6 +119,83 @@ func (d *PerformanceDao) RefreshForTask(taskID uint) error {
 	return d.Upsert(cache)
 }
 
+// RefreshForProject recomputes execution+goal scores for a project from its tasks' milestones
+// and upserts a performance_cache entry with entity_type='PROJECT'.
+// Called immediately after any milestone update so the project listing stays current.
+func (d *PerformanceDao) RefreshForProject(projectID uint) error {
+	taskDao := TaskDao{}
+	milestoneDao := MilestoneDao{}
+
+	tasks, _, err := taskDao.ListByProject(projectID, 0, 0)
+	if err != nil {
+		return err
+	}
+
+	var (
+		sumExec, sumGoal, totalWeight float64
+		totalMs, doneMs, blockedMs    int
+		completedTasks                int
+	)
+
+	for _, t := range tasks {
+		milestones, _ := milestoneDao.GetNonBlockedByTask(t.ID)
+		var planned, achieved float64
+		for _, m := range milestones {
+			planned += m.PlannedValue
+			achieved += m.AchievedValue
+		}
+		exec := util.ComputeExecutionScore(planned, achieved)
+
+		startVal := float64(0)
+		if t.StartValue != nil {
+			startVal = *t.StartValue
+		}
+		goal := util.ComputeGoalScore(startVal, t.TargetValue, t.CurrentValue)
+
+		w := t.Weight
+		if w <= 0 {
+			w = 100
+		}
+		sumExec += exec * w
+		sumGoal += goal * w
+		totalWeight += w
+
+		tm, dm, bm := milestoneDao.CountByTask(t.ID)
+		totalMs += int(tm)
+		doneMs += int(dm)
+		blockedMs += int(bm)
+		if t.Status == "COMPLETED" {
+			completedTasks++
+		}
+	}
+
+	var execScore, goalScore float64
+	if totalWeight > 0 {
+		execScore = sumExec / totalWeight
+		goalScore = sumGoal / totalWeight
+	}
+	totalScore := util.ComputePerformanceScore(execScore, goalScore)
+
+	now := time.Now()
+	period := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	cache := &model.PerformanceCache{
+		EntityType:        "PROJECT",
+		EntityID:          projectID,
+		Period:            period,
+		ExecutionScore:    execScore,
+		GoalScore:         goalScore,
+		TotalScore:        totalScore,
+		TasksTotal:        len(tasks),
+		TasksCompleted:    completedTasks,
+		MilestonesTotal:   totalMs,
+		MilestonesDone:    doneMs,
+		MilestonesBlocked: blockedMs,
+	}
+
+	return d.Upsert(cache)
+}
+
 // ComputeScoreForScope aggregates execution+goal scores across all tasks that cover a given ASC or Regiao.
 func (d *PerformanceDao) ComputeScoreForScope(scopeType string, scopeID uint) (execScore, goalScore, totalScore float64, trafficLight string) {
 	taskDao := TaskDao{}
