@@ -15,9 +15,9 @@ type Task struct {
 	ChildTasks    []Task      `gorm:"foreignKey:ParentTaskID" json:"child_tasks,omitempty"`
 	Title         string      `gorm:"not null;size:500" json:"title"`
 	Description   string      `gorm:"type:text" json:"description,omitempty"`
-	OwnerType     string      `gorm:"not null;size:20" json:"owner_type"`  // DIRECAO, DEPARTAMENTO
-	OwnerID       uint        `gorm:"not null" json:"owner_id"`            // direcao_id or departamento_id
-	Frequency     string      `gorm:"not null;size:20" json:"frequency"`   // DAILY, WEEKLY, MONTHLY, QUARTERLY, BIANNUAL, ANNUAL
+	OwnerType     string      `gorm:"not null;size:20" json:"owner_type"` // DIRECAO, DEPARTAMENTO
+	OwnerID       uint        `gorm:"not null" json:"owner_id"`           // direcao_id or departamento_id
+	Frequency     string      `gorm:"not null;size:20" json:"frequency"`  // DAILY, WEEKLY, MONTHLY, QUARTERLY, BIANNUAL, ANNUAL
 	GoalLabel     string      `gorm:"size:255" json:"goal_label,omitempty"`
 	StartValue    *float64    `gorm:"type:decimal(15,2)" json:"start_value"`
 	TargetValue   float64     `gorm:"type:decimal(15,2);not null" json:"target_value"`
@@ -29,6 +29,8 @@ type Task struct {
 	Status        string      `gorm:"size:20;default:ACTIVE" json:"status"` // ACTIVE, COMPLETED, CANCELLED
 	CreatedBy     uint        `gorm:"not null" json:"created_by"`
 	Creator       *User       `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
+	AssignedTo    *uint       `json:"assigned_to,omitempty"`
+	Assignee      *User       `gorm:"foreignKey:AssignedTo" json:"assignee,omitempty"`
 	Scopes        []TaskScope `gorm:"foreignKey:TaskID" json:"scopes,omitempty"`
 	Milestones    []Milestone `gorm:"foreignKey:TaskID" json:"milestones,omitempty"`
 }

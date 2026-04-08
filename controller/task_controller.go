@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -27,24 +28,51 @@ func (TaskController) ListByProject(c *gin.Context) {
 }
 
 type TaskInput struct {
-	Title        string        `json:"title" binding:"required"`
-	Description  string        `json:"description"`
-	OwnerType    string        `json:"owner_type" binding:"required,oneof=DIRECAO DEPARTAMENTO"`
-	OwnerID      uint          `json:"owner_id" binding:"required"`
-	Frequency    string        `json:"frequency" binding:"required,oneof=DAILY WEEKLY MONTHLY QUARTERLY BIANNUAL ANNUAL"`
-	GoalLabel    string        `json:"goal_label"`
-	StartValue   *float64      `json:"start_value"`
-	TargetValue  float64       `json:"target_value" binding:"required"`
-	Weight       float64       `json:"weight"`
-	StartDate    *string       `json:"start_date"`
-	EndDate      *string       `json:"end_date"`
-	ParentTaskID *uint         `json:"parent_task_id"`
-	Scopes       []ScopeInput  `json:"scopes"`
+	Title        string       `json:"title" binding:"required"`
+	Description  string       `json:"description"`
+	OwnerType    string       `json:"owner_type" binding:"required,oneof=DIRECAO DEPARTAMENTO"`
+	OwnerID      uint         `json:"owner_id" binding:"required"`
+	AssignedTo   *uint        `json:"assigned_to"`
+	Frequency    string       `json:"frequency" binding:"required,oneof=DAILY WEEKLY MONTHLY QUARTERLY BIANNUAL ANNUAL"`
+	GoalLabel    string       `json:"goal_label"`
+	StartValue   *float64     `json:"start_value"`
+	TargetValue  float64      `json:"target_value" binding:"required"`
+	Weight       float64      `json:"weight"`
+	StartDate    *string      `json:"start_date"`
+	EndDate      *string      `json:"end_date"`
+	ParentTaskID *uint        `json:"parent_task_id"`
+	Scopes       []ScopeInput `json:"scopes"`
 }
 
 type ScopeInput struct {
 	ScopeType string `json:"scope_type" binding:"required,oneof=NACIONAL REGIONAL ASC"`
 	ScopeID   *uint  `json:"scope_id"`
+}
+
+func validateTaskAssignee(ownerType string, ownerID uint, assignedTo *uint) error {
+	if assignedTo == nil {
+		return nil
+	}
+	if ownerType != "DEPARTAMENTO" {
+		return fmt.Errorf("assigned_to requires owner_type DEPARTAMENTO")
+	}
+
+	deptDao := dao.DepartamentoDao{}
+	dept, err := deptDao.GetByID(ownerID)
+	if err != nil {
+		return fmt.Errorf("department not found")
+	}
+
+	if dept.ResponsibleID != nil && *dept.ResponsibleID == *assignedTo {
+		return nil
+	}
+	for _, u := range dept.Users {
+		if u.ID == *assignedTo {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("assigned user must belong to selected department")
 }
 
 func (TaskController) Create(c *gin.Context) {
@@ -55,6 +83,10 @@ func (TaskController) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
 		return
 	}
+	if err := validateTaskAssignee(input.OwnerType, input.OwnerID, input.AssignedTo); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
 
 	task := model.Task{
 		ProjectID:    uint(projectID),
@@ -62,6 +94,7 @@ func (TaskController) Create(c *gin.Context) {
 		Description:  input.Description,
 		OwnerType:    input.OwnerType,
 		OwnerID:      input.OwnerID,
+		AssignedTo:   input.AssignedTo,
 		Frequency:    input.Frequency,
 		GoalLabel:    input.GoalLabel,
 		StartValue:   input.StartValue,
@@ -142,11 +175,16 @@ func (TaskController) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
 		return
 	}
+	if err := validateTaskAssignee(input.OwnerType, input.OwnerID, input.AssignedTo); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
 
 	task.Title = input.Title
 	task.Description = input.Description
 	task.OwnerType = input.OwnerType
 	task.OwnerID = input.OwnerID
+	task.AssignedTo = input.AssignedTo
 	task.Frequency = input.Frequency
 	task.GoalLabel = input.GoalLabel
 	task.StartValue = input.StartValue

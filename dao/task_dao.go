@@ -12,6 +12,7 @@ func (d *TaskDao) GetByID(id uint) (model.Task, error) {
 	var t model.Task
 	err := Database.
 		Preload("Creator").
+		Preload("Assignee").
 		Preload("Scopes").
 		Preload("Milestones").
 		Where("id = ?", id).First(&t).Error
@@ -23,7 +24,7 @@ func (d *TaskDao) ListByProject(projectID uint, page, limit int) ([]model.Task, 
 	var total int64
 
 	Database.Model(&model.Task{}).Where("project_id = ?", projectID).Count(&total)
-	q := Database.Preload("Creator").Preload("Scopes").Where("project_id = ?", projectID)
+	q := Database.Preload("Creator").Preload("Assignee").Preload("Scopes").Where("project_id = ?", projectID)
 	if limit > 0 && page >= 0 {
 		q = q.Offset(page * limit).Limit(limit)
 	}
@@ -39,7 +40,7 @@ func (d *TaskDao) ListByProjectScoped(projectID uint, page, limit int, scope *Us
 	q = scope.ApplyToTasks(q)
 	q.Count(&total)
 
-	q2 := Database.Preload("Creator").Preload("Scopes").Where("project_id = ?", projectID)
+	q2 := Database.Preload("Creator").Preload("Assignee").Preload("Scopes").Where("project_id = ?", projectID)
 	q2 = scope.ApplyToTasks(q2)
 	if limit > 0 && page >= 0 {
 		q2 = q2.Offset(page * limit).Limit(limit)
@@ -87,6 +88,7 @@ func (d *TaskDao) ListActive() ([]model.Task, error) {
 func (d *TaskDao) ListByOwner(ownerType string, ownerID uint) ([]model.Task, error) {
 	var list []model.Task
 	err := Database.Preload("Scopes").Preload("Milestones").
+		Preload("Assignee").
 		Where("owner_type = ? AND owner_id = ?", ownerType, ownerID).
 		Find(&list).Error
 	return list, err
@@ -95,6 +97,7 @@ func (d *TaskDao) ListByOwner(ownerType string, ownerID uint) ([]model.Task, err
 func (d *TaskDao) GetByProjectWithMilestones(projectID uint) ([]model.Task, error) {
 	var list []model.Task
 	err := Database.Preload("Milestones").Preload("Scopes").
+		Preload("Assignee").
 		Where("project_id = ?", projectID).Find(&list).Error
 	return list, err
 }
@@ -104,6 +107,7 @@ func (d *TaskDao) GetByScopeEntity(scopeType string, scopeID uint) ([]model.Task
 	var list []model.Task
 	err := Database.
 		Preload("Milestones").
+		Preload("Assignee").
 		Joins("JOIN task_scopes ON task_scopes.task_id = tasks.id").
 		Where("task_scopes.scope_type = ? AND task_scopes.scope_id = ? AND tasks.deleted_at IS NULL", scopeType, scopeID).
 		Find(&list).Error
@@ -122,6 +126,7 @@ func (d *TaskDao) GetByScopeEntityInScope(scopeType string, scopeID uint, scope 
 
 	q := Database.
 		Preload("Milestones").
+		Preload("Assignee").
 		Joins("JOIN task_scopes ON task_scopes.task_id = tasks.id").
 		Where("task_scopes.scope_type = ? AND task_scopes.scope_id = ? AND tasks.deleted_at IS NULL",
 			scopeType, scopeID)
