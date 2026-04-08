@@ -17,16 +17,51 @@ var allowedImageTypes = map[string]bool{
 	"image/webp": true,
 }
 
-const maxPhotoSize = 5 * 1024 * 1024 // 5MB
+var allowedMilestoneFileTypes = map[string]bool{
+	"image/jpeg":         true,
+	"image/png":          true,
+	"image/webp":         true,
+	"application/pdf":    true,
+	"text/plain":         true,
+	"text/csv":           true,
+	"application/msword": true,
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+	"application/vnd.ms-excel": true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
+	"application/zip":              true,
+	"application/x-zip-compressed": true,
+}
+
+var allowedMilestoneExtensions = map[string]bool{
+	".jpg":  true,
+	".jpeg": true,
+	".png":  true,
+	".webp": true,
+	".pdf":  true,
+	".txt":  true,
+	".csv":  true,
+	".doc":  true,
+	".docx": true,
+	".xls":  true,
+	".xlsx": true,
+	".zip":  true,
+}
+
+const maxMilestoneFileSize = 5 * 1024 * 1024 // 5MB
+
+func normalizeContentType(ct string) string {
+	return strings.TrimSpace(strings.Split(ct, ";")[0])
+}
 
 func ValidatePhoto(header *multipart.FileHeader) error {
-	if header.Size > maxPhotoSize {
+	if header.Size > maxMilestoneFileSize {
 		return fmt.Errorf("file too large: max 5MB")
 	}
 
-	ct := header.Header.Get("Content-Type")
-	if !allowedImageTypes[ct] {
-		return fmt.Errorf("invalid file type: only JPEG, PNG, WebP allowed")
+	ct := normalizeContentType(header.Header.Get("Content-Type"))
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if !allowedMilestoneFileTypes[ct] && !allowedMilestoneExtensions[ext] {
+		return fmt.Errorf("invalid file type: allowed JPG, PNG, WebP, PDF, TXT, CSV, DOC, DOCX, XLS, XLSX, ZIP")
 	}
 	return nil
 }
@@ -81,6 +116,5 @@ func uploadToS3(file multipart.File, header *multipart.FileHeader) (string, erro
 }
 
 func IsValidImageContentType(ct string) bool {
-	ct = strings.Split(ct, ";")[0]
-	return allowedImageTypes[strings.TrimSpace(ct)]
+	return allowedImageTypes[normalizeContentType(ct)]
 }

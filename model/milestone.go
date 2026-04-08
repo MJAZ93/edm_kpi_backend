@@ -12,8 +12,9 @@ type Milestone struct {
 	Task          *Task      `gorm:"foreignKey:TaskID" json:"task,omitempty"`
 	Title         string     `gorm:"not null;size:500" json:"title"`
 	Description   string     `gorm:"type:text" json:"description,omitempty"`
-	ScopeType     string     `gorm:"size:20" json:"scope_type,omitempty"`  // NACIONAL, REGIONAL, ASC
+	ScopeType     string     `gorm:"size:20" json:"scope_type,omitempty"` // NACIONAL, REGIONAL, ASC
 	ScopeID       *uint      `json:"scope_id,omitempty"`
+	Frequency     string     `gorm:"size:20" json:"frequency,omitempty"` // DAILY, WEEKLY, MONTHLY, QUARTERLY, BIANNUAL, ANNUAL
 	PlannedValue  float64    `gorm:"type:decimal(15,2);not null" json:"planned_value"`
 	AchievedValue float64    `gorm:"type:decimal(15,2);default:0" json:"achieved_value"`
 	PlannedDate   time.Time  `gorm:"not null" json:"planned_date"`

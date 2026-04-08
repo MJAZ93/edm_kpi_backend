@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -46,10 +47,53 @@ type MilestoneInput struct {
 	Description  string  `json:"description"`
 	ScopeType    string  `json:"scope_type"`
 	ScopeID      *uint   `json:"scope_id"`
+	Frequency    string  `json:"frequency"`
 	PlannedValue float64 `json:"planned_value" binding:"required"`
 	PlannedDate  string  `json:"planned_date" binding:"required"`
 	Notes        string  `json:"notes"`
 	AssignedTo   *uint   `json:"assigned_to"`
+}
+
+func normalizeFrequency(input, fallback string) (string, error) {
+	freq := input
+	if freq == "" {
+		freq = fallback
+	}
+
+	switch freq {
+	case "DAILY", "WEEKLY", "MONTHLY", "QUARTERLY", "BIANNUAL", "ANNUAL":
+		return freq, nil
+	case "":
+		return "", fmt.Errorf("frequency is required")
+	default:
+		return "", fmt.Errorf("invalid frequency")
+	}
+}
+
+func validateMilestoneAssignee(task model.Task, assignedTo *uint) error {
+	if assignedTo == nil {
+		return nil
+	}
+	if task.OwnerType != "DEPARTAMENTO" {
+		return fmt.Errorf("assigned user requires a department-owned task")
+	}
+
+	deptDao := dao.DepartamentoDao{}
+	dept, err := deptDao.GetByID(task.OwnerID)
+	if err != nil {
+		return fmt.Errorf("department not found")
+	}
+
+	if dept.ResponsibleID != nil && *dept.ResponsibleID == *assignedTo {
+		return nil
+	}
+	for _, u := range dept.Users {
+		if u.ID == *assignedTo {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("assigned user must belong to the task department")
 }
 
 func (MilestoneController) Create(c *gin.Context) {
@@ -61,9 +105,25 @@ func (MilestoneController) Create(c *gin.Context) {
 		return
 	}
 
+	taskDao := dao.TaskDao{}
+	task, err := taskDao.GetByID(uint(taskID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "task not found"})
+		return
+	}
+
 	plannedDate, err := parseDate(input.PlannedDate)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": "invalid planned_date format"})
+		return
+	}
+	frequency, err := normalizeFrequency(input.Frequency, task.Frequency)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
+	if err := validateMilestoneAssignee(task, input.AssignedTo); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
 		return
 	}
 
@@ -73,6 +133,7 @@ func (MilestoneController) Create(c *gin.Context) {
 		Description:  input.Description,
 		ScopeType:    input.ScopeType,
 		ScopeID:      input.ScopeID,
+		Frequency:    frequency,
 		PlannedValue: input.PlannedValue,
 		PlannedDate:  *plannedDate,
 		Notes:        input.Notes,
@@ -110,6 +171,7 @@ type MilestoneUpdateInput struct {
 	Status        *string  `json:"status"`
 	Notes         *string  `json:"notes"`
 	Title         *string  `json:"title"`
+	Frequency     *string  `json:"frequency"`
 	PlannedValue  *float64 `json:"planned_value"`
 	PlannedDate   *string  `json:"planned_date"`
 	AssignedTo    *uint    `json:"assigned_to"`
@@ -131,6 +193,12 @@ func (MilestoneController) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
 		return
 	}
+	taskDao := dao.TaskDao{}
+	task, taskErr := taskDao.GetByID(milestone.TaskID)
+	if taskErr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "task not found"})
+		return
+	}
 
 	if input.AchievedValue != nil {
 		milestone.AchievedValue = *input.AchievedValue
@@ -148,6 +216,14 @@ func (MilestoneController) Update(c *gin.Context) {
 	if input.Title != nil {
 		milestone.Title = *input.Title
 	}
+	if input.Frequency != nil {
+		frequency, err := normalizeFrequency(*input.Frequency, milestone.Frequency)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+			return
+		}
+		milestone.Frequency = frequency
+	}
 	if input.PlannedValue != nil {
 		milestone.PlannedValue = *input.PlannedValue
 	}
@@ -158,6 +234,10 @@ func (MilestoneController) Update(c *gin.Context) {
 		}
 	}
 	if input.AssignedTo != nil {
+		if err := validateMilestoneAssignee(task, input.AssignedTo); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+			return
+		}
 		milestone.AssignedTo = input.AssignedTo
 	}
 
@@ -170,7 +250,6 @@ func (MilestoneController) Update(c *gin.Context) {
 	}
 
 	// Recalculate parent task current_value
-	taskDao := dao.TaskDao{}
 	taskDao.RecalcCurrentValue(milestone.TaskID)
 
 	// Refresh performance cache: task owner + project-level
@@ -178,7 +257,7 @@ func (MilestoneController) Update(c *gin.Context) {
 	go perfDao.RefreshForTask(milestone.TaskID)
 
 	// Notify up the chain
-	task, _ := taskDao.GetByID(milestone.TaskID)
+	task, _ = taskDao.GetByID(milestone.TaskID)
 	if task.ProjectID != 0 {
 		go perfDao.RefreshForProject(task.ProjectID)
 	}
@@ -221,7 +300,7 @@ func (MilestoneController) UploadPhoto(c *gin.Context) {
 
 	file, header, err := c.Request.FormFile("photo")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": "photo file required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": "attachment file required"})
 		return
 	}
 	defer file.Close()

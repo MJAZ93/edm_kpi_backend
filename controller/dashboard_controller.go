@@ -54,13 +54,13 @@ func (DashboardController) DrillDown(c *gin.Context) {
 	perfDao := dao.PerformanceDao{}
 
 	type DrillItem struct {
-		ID            uint    `json:"id"`
-		Name          string  `json:"name"`
-		Type          string  `json:"type"`
+		ID             uint    `json:"id"`
+		Name           string  `json:"name"`
+		Type           string  `json:"type"`
 		ExecutionScore float64 `json:"execution_score"`
-		GoalScore     float64 `json:"goal_score"`
-		TotalScore    float64 `json:"total_score"`
-		TrafficLight  string  `json:"traffic_light"`
+		GoalScore      float64 `json:"goal_score"`
+		TotalScore     float64 `json:"total_score"`
+		TrafficLight   string  `json:"traffic_light"`
 	}
 
 	var items []DrillItem
@@ -332,15 +332,15 @@ func (DashboardController) MapData(c *gin.Context) {
 //
 // Query params: type=ASC|REGIAO  id=<uint>
 func (DashboardController) ScopeStats(c *gin.Context) {
-	scopeType := c.Query("type")   // "ASC" or "REGIAO"
-	idStr     := c.Query("id")
-	id, _     := strconv.Atoi(idStr)
+	scopeType := c.Query("type") // "ASC" or "REGIAO"
+	idStr := c.Query("id")
+	id, _ := strconv.Atoi(idStr)
 	if id == 0 || (scopeType != "ASC" && scopeType != "REGIAO") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "type and id required"})
 		return
 	}
 
-	geoDao  := dao.GeoDao{}
+	geoDao := dao.GeoDao{}
 	taskDao := dao.TaskDao{}
 	perfDao := dao.PerformanceDao{}
 
@@ -402,9 +402,9 @@ func (DashboardController) ScopeStats(c *gin.Context) {
 		ID   uint   `json:"id"`
 		Name string `json:"name"`
 	}
-	projectMap  := map[uint]ProjectInfo{}
-	dirMap      := map[uint]DirInfo{}
-	direcaoDao  := dao.DirecaoDao{}
+	projectMap := map[uint]ProjectInfo{}
+	dirMap := map[uint]DirInfo{}
+	direcaoDao := dao.DirecaoDao{}
 
 	for _, t := range scopedTasks {
 		if t.ProjectID != 0 {
@@ -567,8 +567,8 @@ func (DashboardController) Timeline(c *gin.Context) {
 }
 
 func (DashboardController) Distribution(c *gin.Context) {
-	dimension   := c.DefaultQuery("dimension", "traffic_light")
-	entityType  := c.DefaultQuery("entity_type", "ASC")
+	dimension := c.DefaultQuery("dimension", "traffic_light")
+	entityType := c.DefaultQuery("entity_type", "ASC")
 
 	perfDao := dao.PerformanceDao{}
 	items, err := perfDao.LiveTopPerformers(entityType, 0)
@@ -593,23 +593,26 @@ func (DashboardController) Distribution(c *gin.Context) {
 	}
 	total := float64(len(items))
 	pct := func(n int) float64 {
-		if total == 0 { return 0 }
+		if total == 0 {
+			return 0
+		}
 		return float64(n) / total * 100
 	}
 	buckets := []Bucket{
-		{Label: "GREEN",  Count: counts["GREEN"],  Percentage: pct(counts["GREEN"])},
+		{Label: "GREEN", Count: counts["GREEN"], Percentage: pct(counts["GREEN"])},
 		{Label: "YELLOW", Count: counts["YELLOW"], Percentage: pct(counts["YELLOW"])},
-		{Label: "RED",    Count: counts["RED"],    Percentage: pct(counts["RED"])},
+		{Label: "RED", Count: counts["RED"], Percentage: pct(counts["RED"])},
 	}
 	c.JSON(http.StatusOK, gin.H{"dimension": dimension, "entity_type": entityType, "data": buckets})
 }
 
 // EmployeeRanking returns per-user performance scores scoped to the requester's role:
-//   CA        → all non-admin employees
-//   DIRECAO   → employees in departments under that direction
-//   DEPARTAMENTO → employees in that specific department
+//
+//	CA        → all non-admin employees
+//	DIRECAO   → employees in departments under that direction
+//	DEPARTAMENTO → employees in that specific department
 func (DashboardController) EmployeeRanking(c *gin.Context) {
-	role   := util.ExtractRole(c)
+	role := util.ExtractRole(c)
 	userID := util.ExtractUserID(c)
 
 	perfDao := dao.PerformanceDao{}
@@ -812,7 +815,7 @@ func resolveEntityName(entityType string, id uint) string {
 //	}
 func (DashboardController) DirecaoOverview(c *gin.Context) {
 	userID := util.ExtractUserID(c)
-	role   := util.ExtractRole(c)
+	role := util.ExtractRole(c)
 
 	if role != "DIRECAO" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
@@ -845,8 +848,8 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 	projects, _ := projDao.ListByDirecao(dir.ID)
 
 	type ProjectItem struct {
-		ID    uint   `json:"id"`
-		Title string `json:"title"`
+		ID     uint   `json:"id"`
+		Title  string `json:"title"`
 		Status string `json:"status"`
 	}
 	projItems := make([]ProjectItem, 0, len(projects))
@@ -940,9 +943,9 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		e, g, t, l := perfDao.ComputeScoreForOwner("DEPARTAMENTO", d.ID)
 		deptScores = append(deptScores, DeptScore{
 			ID: d.ID, Name: d.Name,
-			ExecutionScore: math.Round(e*10)/10,
-			GoalScore:      math.Round(g*10)/10,
-			TotalScore:     math.Round(t*10)/10,
+			ExecutionScore: math.Round(e*10) / 10,
+			GoalScore:      math.Round(g*10) / 10,
+			TotalScore:     math.Round(t*10) / 10,
 			TrafficLight:   l,
 		})
 	}
@@ -1062,7 +1065,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 // scoped to the department the requesting user is responsible for.
 func (DashboardController) DepartamentoOverview(c *gin.Context) {
 	userID := util.ExtractUserID(c)
-	role   := util.ExtractRole(c)
+	role := util.ExtractRole(c)
 
 	if role != "DEPARTAMENTO" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
@@ -1074,8 +1077,8 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 	dept, err := deptDao.GetByResponsible(userID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"department":      nil,
-			"tasks":           []interface{}{},
+			"department":       nil,
+			"tasks":            []interface{}{},
 			"pending_blockers": []interface{}{},
 			"stats": gin.H{
 				"total":         0,
@@ -1105,6 +1108,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		Status        string  `json:"status"`
 		ProjectTitle  string  `json:"project_title"`
 		GoalLabel     string  `json:"goal_label"`
+		Frequency     string  `json:"frequency"`
 		CreatedBy     uint    `json:"created_by"`
 		CreatorRole   string  `json:"creator_role"`
 		ProgressPct   float64 `json:"progress_pct"`
@@ -1116,6 +1120,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		SELECT t.id, t.title, t.status,
 		       COALESCE(p.title,'') AS project_title,
 		       COALESCE(t.goal_label,'') AS goal_label,
+		       COALESCE(t.frequency,'') AS frequency,
 		       t.created_by,
 		       u.role AS creator_role,
 		       CASE WHEN (t.target_value - COALESCE(t.start_value,0)) = 0 THEN 0
@@ -1150,6 +1155,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		Status         string     `json:"status"`
 		ProjectTitle   string     `json:"project_title"`
 		GoalLabel      string     `json:"goal_label"`
+		Frequency      string     `json:"frequency"`
 		ProgressPct    float64    `json:"progress_pct"`
 		DaysElapsed    int        `json:"days_elapsed"`
 		DaysRemaining  int        `json:"days_remaining"`
@@ -1182,7 +1188,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		}
 
 		isFromDirector := tr.CreatorRole == "DIRECAO"
-		isUnassigned   := len(assignees) == 0
+		isUnassigned := len(assignees) == 0
 
 		if isUnassigned {
 			unassignedCount++
@@ -1200,6 +1206,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 			Status:         tr.Status,
 			ProjectTitle:   tr.ProjectTitle,
 			GoalLabel:      tr.GoalLabel,
+			Frequency:      tr.Frequency,
 			ProgressPct:    tr.ProgressPct,
 			DaysElapsed:    tr.DaysElapsed,
 			DaysRemaining:  tr.DaysRemaining,
@@ -1287,7 +1294,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 // personal performance score.
 func (DashboardController) MemberOverview(c *gin.Context) {
 	userID := util.ExtractUserID(c)
-	role   := util.ExtractRole(c)
+	role := util.ExtractRole(c)
 
 	if role != "DEPARTAMENTO" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
@@ -1318,6 +1325,7 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 		ID            uint    `json:"id"`
 		Title         string  `json:"title"`
 		Status        string  `json:"status"`
+		Frequency     string  `json:"frequency"`
 		PlannedDate   string  `json:"planned_date"`
 		PlannedValue  float64 `json:"planned_value"`
 		AchievedValue float64 `json:"achieved_value"`
@@ -1331,6 +1339,7 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 	var milestones []MsRow
 	dao.Database.Raw(`
 		SELECT m.id, m.title, m.status,
+		       COALESCE(m.frequency, t.frequency, '') AS frequency,
 		       COALESCE(TO_CHAR(m.planned_date, 'YYYY-MM-DD'), '') AS planned_date,
 		       COALESCE(m.planned_value, 0)   AS planned_value,
 		       COALESCE(m.achieved_value, 0)  AS achieved_value,
@@ -1394,9 +1403,9 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 
 	// ── Projects the user is involved in ─────────────────────────────────────
 	type ProjectRow struct {
-		ID    uint   `json:"id"`
-		Title string `json:"title"`
-		MsCount int  `json:"ms_count"`
+		ID      uint   `json:"id"`
+		Title   string `json:"title"`
+		MsCount int    `json:"ms_count"`
 	}
 	var projects []ProjectRow
 	dao.Database.Raw(`
@@ -1475,7 +1484,7 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 //	}
 func (DashboardController) RegionalOverview(c *gin.Context) {
 	userID := util.ExtractUserID(c)
-	role   := util.ExtractRole(c)
+	role := util.ExtractRole(c)
 
 	if role != "DIRECAO" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
@@ -1544,7 +1553,10 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 		ORDER BY p.title ASC
 	`, reg.ID).Scan(&regProjects)
 	for _, p := range regProjects {
-		if !seen[p.ID] { seen[p.ID] = true; rawProjects = append(rawProjects, p) }
+		if !seen[p.ID] {
+			seen[p.ID] = true
+			rawProjects = append(rawProjects, p)
+		}
 	}
 
 	// 2. Milestones scoped to any ASC within this regiao (only if there are ASCs)
@@ -1561,7 +1573,10 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 			ORDER BY p.title ASC
 		`, ascIDList).Scan(&ascProjects)
 		for _, p := range ascProjects {
-			if !seen[p.ID] { seen[p.ID] = true; rawProjects = append(rawProjects, p) }
+			if !seen[p.ID] {
+				seen[p.ID] = true
+				rawProjects = append(rawProjects, p)
+			}
 		}
 	}
 
@@ -1594,8 +1609,8 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 		return nReg + nAsc
 	}
 
-	msTotal   := countMs("")
-	msDone    := countMs("DONE")
+	msTotal := countMs("")
+	msDone := countMs("DONE")
 	msPending := countMs("PENDING")
 	msBlocked := countMs("BLOCKED")
 
@@ -1606,6 +1621,7 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 		ID            uint      `json:"id"`
 		Title         string    `json:"title"`
 		Status        string    `json:"status"`
+		Frequency     string    `json:"frequency"`
 		PlannedDate   time.Time `json:"planned_date"`
 		PlannedValue  float64   `json:"planned_value"`
 		AchievedValue float64   `json:"achieved_value"`
@@ -1623,7 +1639,7 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 	// Milestones scoped directly to this regiao
 	var regiaoMs []MilestoneItem
 	dao.Database.Raw(`
-		SELECT m.id, m.title, m.status, m.planned_date, m.planned_value,
+		SELECT m.id, m.title, m.status, COALESCE(m.frequency, t.frequency, '') AS frequency, m.planned_date, m.planned_value,
 		       m.achieved_value, m.scope_type, m.scope_id,
 		       ? AS scope_name,
 		       t.id AS task_id, t.title AS task_title,
@@ -1648,7 +1664,7 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 
 		var ascMs []MilestoneItem
 		dao.Database.Raw(`
-			SELECT m.id, m.title, m.status, m.planned_date, m.planned_value,
+			SELECT m.id, m.title, m.status, COALESCE(m.frequency, t.frequency, '') AS frequency, m.planned_date, m.planned_value,
 			       m.achieved_value, m.scope_type, m.scope_id,
 			       t.id AS task_id, t.title AS task_title,
 			       p.id AS project_id, p.title AS project_title
