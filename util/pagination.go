@@ -30,8 +30,8 @@ func ParsePagination(c *gin.Context) PaginationParams {
 	if limit <= 0 {
 		limit = 20
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > 500 {
+		limit = 500
 	}
 
 	return PaginationParams{Page: page, Limit: limit}

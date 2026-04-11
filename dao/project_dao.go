@@ -34,7 +34,7 @@ func (d *ProjectDao) List(page, limit int, filters map[string]interface{}) ([]mo
 	}
 	q.Count(&total)
 
-	q2 := Database.Preload("Creator")
+	q2 := Database.Preload("Creator").Preload("Tasks").Preload("Tasks.Milestones").Preload("Tasks.Scopes")
 	for k, v := range filters {
 		q2 = q2.Where(k+" = ?", v)
 	}
@@ -86,7 +86,7 @@ func (d *ProjectDao) ListScoped(page, limit int, filters map[string]interface{},
 	q = scope.ApplyToProjects(q)
 	q.Count(&total)
 
-	q2 := Database.Preload("Creator")
+	q2 := Database.Preload("Creator").Preload("Tasks").Preload("Tasks.Milestones").Preload("Tasks.Scopes")
 	for k, v := range filters {
 		q2 = q2.Where(k+" = ?", v)
 	}

@@ -58,14 +58,51 @@ func (d *TaskDao) SoftDelete(id uint) error {
 }
 
 func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
-	return Database.Exec(`
-		UPDATE tasks SET current_value = (
-			SELECT COALESCE(SUM(achieved_value), 0)
-			FROM milestones
-			WHERE task_id = ? AND deleted_at IS NULL
-		), updated_at = NOW()
-		WHERE id = ?
-	`, taskID, taskID).Error
+	var task model.Task
+	if err := Database.Select("aggregation_type", "start_value").Where("id = ?", taskID).First(&task).Error; err != nil {
+		return err
+	}
+
+	aggType := task.AggregationType
+	if aggType == "" {
+		aggType = "SUM_UP"
+	}
+
+	switch aggType {
+	case "SUM_DOWN":
+		startVal := float64(0)
+		if task.StartValue != nil {
+			startVal = *task.StartValue
+		}
+		return Database.Exec(`
+			UPDATE tasks SET current_value = ? - (
+				SELECT COALESCE(SUM(achieved_value), 0)
+				FROM milestones
+				WHERE task_id = ? AND deleted_at IS NULL
+			), updated_at = NOW()
+			WHERE id = ?
+		`, startVal, taskID, taskID).Error
+
+	case "AVG":
+		return Database.Exec(`
+			UPDATE tasks SET current_value = (
+				SELECT COALESCE(AVG(achieved_value), 0)
+				FROM milestones
+				WHERE task_id = ? AND deleted_at IS NULL
+			), updated_at = NOW()
+			WHERE id = ?
+		`, taskID, taskID).Error
+
+	default: // SUM_UP
+		return Database.Exec(`
+			UPDATE tasks SET current_value = (
+				SELECT COALESCE(SUM(achieved_value), 0)
+				FROM milestones
+				WHERE task_id = ? AND deleted_at IS NULL
+			), updated_at = NOW()
+			WHERE id = ?
+		`, taskID, taskID).Error
+	}
 }
 
 func (d *TaskDao) CreateScopes(scopes []model.TaskScope) error {

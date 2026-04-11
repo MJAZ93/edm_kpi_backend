@@ -8,7 +8,7 @@ import (
 
 // UserScope holds the resolved org entity IDs visible to a user.
 type UserScope struct {
-	IsGlobal        bool   // ADMIN/CA — no filtering
+	IsGlobal        bool // ADMIN/CA — no filtering
 	Role            string
 	UserID          uint
 	PelouroIDs      []uint
@@ -179,12 +179,39 @@ func (s *UserScope) ApplyToProjects(q *gorm.DB) *gorm.DB {
 		return q.Where(cond)
 	}
 
-	// Build OR conditions: CA projects are always visible + matching org IDs
+	// Department users should also see any project that has tasks owned by
+	// their department(s), even when the project itself was created higher up.
+	if s.Role == "DEPARTAMENTO" {
+		taskOwnedProjectSubq := Database.Model(&model.Task{}).
+			Select("DISTINCT project_id").
+			Where("owner_type = 'DEPARTAMENTO' AND owner_id IN ? AND deleted_at IS NULL", safeIDs(s.DepartamentoIDs))
+
+		return q.Where(
+			Database.Where("creator_type IN ('CA','ADMIN')").
+				Or("creator_type = 'PELOURO' AND creator_org_id IN ?", safeIDs(s.PelouroIDs)).
+				Or("creator_type = 'DIRECAO' AND creator_org_id IN ?", safeIDs(s.DirecaoIDs)).
+				Or("creator_type = 'DEPARTAMENTO' AND creator_org_id IN ?", safeIDs(s.DepartamentoIDs)).
+				Or("id IN (?)", taskOwnedProjectSubq),
+		)
+	}
+
+	// For DIRECAO/PELOURO users, also check project_direcoes join table and task ownership
+	taskOwnedProjectSubq := Database.Model(&model.Task{}).
+		Select("DISTINCT project_id").
+		Where("deleted_at IS NULL AND ((owner_type = 'DIRECAO' AND owner_id IN ?) OR (owner_type = 'DEPARTAMENTO' AND owner_id IN ?))",
+			safeIDs(s.DirecaoIDs), safeIDs(s.DepartamentoIDs))
+
+	direcaoLinkedSubq := Database.Table("project_direcoes").
+		Select("project_id").
+		Where("direcao_id IN ?", safeIDs(s.DirecaoIDs))
+
 	return q.Where(
 		Database.Where("creator_type IN ('CA','ADMIN')").
 			Or("creator_type = 'PELOURO' AND creator_org_id IN ?", safeIDs(s.PelouroIDs)).
 			Or("creator_type = 'DIRECAO' AND creator_org_id IN ?", safeIDs(s.DirecaoIDs)).
-			Or("creator_type = 'DEPARTAMENTO' AND creator_org_id IN ?", safeIDs(s.DepartamentoIDs)),
+			Or("creator_type = 'DEPARTAMENTO' AND creator_org_id IN ?", safeIDs(s.DepartamentoIDs)).
+			Or("id IN (?)", taskOwnedProjectSubq).
+			Or("id IN (?)", direcaoLinkedSubq),
 	)
 }
 

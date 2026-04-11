@@ -21,8 +21,9 @@ type Task struct {
 	GoalLabel     string      `gorm:"size:255" json:"goal_label,omitempty"`
 	StartValue    *float64    `gorm:"type:decimal(15,2)" json:"start_value"`
 	TargetValue   float64     `gorm:"type:decimal(15,2);not null" json:"target_value"`
-	CurrentValue  float64     `gorm:"type:decimal(15,2);default:0" json:"current_value"`
-	Weight        float64     `gorm:"type:decimal(5,2);default:100.0" json:"weight"`
+	CurrentValue    float64     `gorm:"type:decimal(15,2);default:0" json:"current_value"`
+	AggregationType string      `gorm:"size:20;default:SUM_UP" json:"aggregation_type"` // SUM_UP, SUM_DOWN, AVG
+	Weight          float64     `gorm:"type:decimal(5,2);default:100.0" json:"weight"`
 	StartDate     *time.Time  `json:"start_date,omitempty"`
 	EndDate       *time.Time  `json:"end_date,omitempty"`
 	NextUpdateDue *time.Time  `json:"next_update_due,omitempty"`

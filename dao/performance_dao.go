@@ -8,6 +8,22 @@ import (
 
 type PerformanceDao struct{}
 
+// taskExecScore computes execution score for a task, respecting aggregation_type.
+// For AVG tasks the planned/achieved are averaged across milestones instead of summed.
+func taskExecScore(t model.Task, milestones []model.Milestone) float64 {
+	var planned, achieved float64
+	for _, m := range milestones {
+		planned += m.PlannedValue
+		achieved += m.AchievedValue
+	}
+	if t.AggregationType == "AVG" && len(milestones) > 0 {
+		n := float64(len(milestones))
+		planned = planned / n
+		achieved = achieved / n
+	}
+	return util.ComputeExecutionScore(planned, achieved)
+}
+
 func (d *PerformanceDao) Upsert(cache *model.PerformanceCache) error {
 	cache.ComputedAt = time.Now()
 	cache.TrafficLight = util.GetTrafficLight(cache.TotalScore)
@@ -82,13 +98,7 @@ func (d *PerformanceDao) RefreshForTask(taskID uint) error {
 		return err
 	}
 
-	var totalPlanned, totalAchieved float64
-	for _, m := range milestones {
-		totalPlanned += m.PlannedValue
-		totalAchieved += m.AchievedValue
-	}
-
-	execScore := util.ComputeExecutionScore(totalPlanned, totalAchieved)
+	execScore := taskExecScore(task, milestones)
 
 	startVal := float64(0)
 	if task.StartValue != nil {
@@ -139,12 +149,7 @@ func (d *PerformanceDao) RefreshForProject(projectID uint) error {
 
 	for _, t := range tasks {
 		milestones, _ := milestoneDao.GetNonBlockedByTask(t.ID)
-		var planned, achieved float64
-		for _, m := range milestones {
-			planned += m.PlannedValue
-			achieved += m.AchievedValue
-		}
-		exec := util.ComputeExecutionScore(planned, achieved)
+		exec := taskExecScore(t, milestones)
 
 		startVal := float64(0)
 		if t.StartValue != nil {
@@ -209,12 +214,7 @@ func (d *PerformanceDao) ComputeScoreForScope(scopeType string, scopeID uint) (e
 	var sumExec, sumGoal, totalWeight float64
 	for _, t := range tasks {
 		milestones, _ := milestoneDao.GetNonBlockedByTask(t.ID)
-		var planned, achieved float64
-		for _, m := range milestones {
-			planned += m.PlannedValue
-			achieved += m.AchievedValue
-		}
-		exec := util.ComputeExecutionScore(planned, achieved)
+		exec := taskExecScore(t, milestones)
 		startVal := float64(0)
 		if t.StartValue != nil {
 			startVal = *t.StartValue
@@ -258,12 +258,7 @@ func (d *PerformanceDao) ComputeScoreForScopeScoped(scopeType string, scopeID ui
 	var sumExec, sumGoal, totalWeight float64
 	for _, t := range tasks {
 		milestones, _ := milestoneDao.GetNonBlockedByTask(t.ID)
-		var planned, achieved float64
-		for _, m := range milestones {
-			planned += m.PlannedValue
-			achieved += m.AchievedValue
-		}
-		exec := util.ComputeExecutionScore(planned, achieved)
+		exec := taskExecScore(t, milestones)
 		startVal := float64(0)
 		if t.StartValue != nil {
 			startVal = *t.StartValue
@@ -326,12 +321,7 @@ func (d *PerformanceDao) ComputeScoreForOwner(ownerType string, ownerID uint) (e
 	var sumExec, sumGoal, totalWeight float64
 	for _, t := range tasks {
 		milestones, _ := milestoneDao.GetNonBlockedByTask(t.ID)
-		var planned, achieved float64
-		for _, m := range milestones {
-			planned += m.PlannedValue
-			achieved += m.AchievedValue
-		}
-		exec := util.ComputeExecutionScore(planned, achieved)
+		exec := taskExecScore(t, milestones)
 		startVal := float64(0)
 		if t.StartValue != nil {
 			startVal = *t.StartValue
@@ -499,14 +489,23 @@ func (d *PerformanceDao) EmployeeRanking(role string, orgID uint) ([]EmployeeSco
 	Database.Raw(`SELECT DISTINCT responsible_id AS user_id FROM regiaos WHERE deleted_at IS NULL AND responsible_id IS NOT NULL`).Scan(&regiaoRows)
 
 	// Priority: dir > dept > asc > regional > colaborador
-	for _, r := range regiaoRows { categoryMap[r.UserID] = "DIR_REGIONAL" }
-	for _, r := range ascRows    { categoryMap[r.UserID] = "DIR_ASC" }
-	for _, r := range deptRows   { categoryMap[r.UserID] = "CHEFE_DEPT" }
-	for _, r := range dirRows    { categoryMap[r.UserID] = "DIR_DIRECAO" }
+	for _, r := range regiaoRows {
+		categoryMap[r.UserID] = "DIR_REGIONAL"
+	}
+	for _, r := range ascRows {
+		categoryMap[r.UserID] = "DIR_ASC"
+	}
+	for _, r := range deptRows {
+		categoryMap[r.UserID] = "CHEFE_DEPT"
+	}
+	for _, r := range dirRows {
+		categoryMap[r.UserID] = "DIR_DIRECAO"
+	}
 
 	var scores []EmployeeScore
 	for _, r := range rows {
-		// Milestones this user created or was the last updater of
+		// Milestones effectively assigned to this user. If the milestone has no
+		// explicit assignee, fall back to the parent task assignee.
 		type msRow struct {
 			PlannedValue  float64
 			AchievedValue float64
@@ -517,8 +516,10 @@ func (d *PerformanceDao) EmployeeRanking(role string, orgID uint) ([]EmployeeSco
 		Database.Raw(`
 			SELECT m.planned_value, m.achieved_value, m.status, m.task_id
 			FROM milestones m
-			WHERE m.deleted_at IS NULL AND (m.created_by = ? OR m.updated_by = ?)
-		`, r.ID, r.ID).Scan(&ms)
+			JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+			WHERE m.deleted_at IS NULL
+			  AND COALESCE(m.assigned_to, t.assigned_to) = ?
+		`, r.ID).Scan(&ms)
 
 		cat := categoryMap[r.ID]
 		if cat == "" {
@@ -591,7 +592,7 @@ func (d *PerformanceDao) EmployeeRanking(role string, orgID uint) ([]EmployeeSco
 }
 
 // ScoreForUser computes the personal performance score for a single user based
-// on the milestones they created or last-updated, regardless of department.
+// on the milestones effectively assigned to them, regardless of department.
 func (d *PerformanceDao) ScoreForUser(userID uint) EmployeeScore {
 	milestoneDao := MilestoneDao{}
 
@@ -611,8 +612,10 @@ func (d *PerformanceDao) ScoreForUser(userID uint) EmployeeScore {
 	Database.Raw(`
 		SELECT m.planned_value, m.achieved_value, m.status, m.task_id
 		FROM milestones m
-		WHERE m.deleted_at IS NULL AND (m.created_by = ? OR m.updated_by = ?)
-	`, userID, userID).Scan(&ms)
+		JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+		WHERE m.deleted_at IS NULL
+		  AND COALESCE(m.assigned_to, t.assigned_to) = ?
+	`, userID).Scan(&ms)
 
 	if len(ms) == 0 {
 		return EmployeeScore{

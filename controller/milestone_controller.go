@@ -171,6 +171,9 @@ type MilestoneUpdateInput struct {
 	Status        *string  `json:"status"`
 	Notes         *string  `json:"notes"`
 	Title         *string  `json:"title"`
+	Description   *string  `json:"description"`
+	ScopeType     *string  `json:"scope_type"`
+	ScopeID       *uint    `json:"scope_id"`
 	Frequency     *string  `json:"frequency"`
 	PlannedValue  *float64 `json:"planned_value"`
 	PlannedDate   *string  `json:"planned_date"`
@@ -215,6 +218,15 @@ func (MilestoneController) Update(c *gin.Context) {
 	}
 	if input.Title != nil {
 		milestone.Title = *input.Title
+	}
+	if input.Description != nil {
+		milestone.Description = *input.Description
+	}
+	if input.ScopeType != nil {
+		milestone.ScopeType = *input.ScopeType
+	}
+	if input.ScopeID != nil {
+		milestone.ScopeID = input.ScopeID
 	}
 	if input.Frequency != nil {
 		frequency, err := normalizeFrequency(*input.Frequency, milestone.Frequency)
@@ -331,9 +343,10 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 	userID := util.ExtractUserID(c)
 
 	var input struct {
-		IncrementValue float64 `json:"increment_value" binding:"required,min=0.01"`
-		Notes          string  `json:"notes"`
-		Status         string  `json:"status"`
+		IncrementValue  float64 `json:"increment_value" binding:"required,min=0.01"`
+		PeriodReference string  `json:"period_reference"`
+		Notes           string  `json:"notes"`
+		Status          string  `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
@@ -347,12 +360,25 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 		return
 	}
 
+	// Validate uniqueness of period_reference per milestone (one entry per period)
+	if input.PeriodReference != "" {
+		var count int64
+		dao.Database.Model(&model.MilestoneProgress{}).
+			Where("milestone_id = ? AND period_reference = ? AND deleted_at IS NULL", uint(id), input.PeriodReference).
+			Count(&count)
+		if count > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "period_already_recorded", "message": "Já existe um registo para este período."})
+			return
+		}
+	}
+
 	// Record the progress event
 	progress := model.MilestoneProgress{
-		MilestoneID:    uint(id),
-		UserID:         userID,
-		IncrementValue: input.IncrementValue,
-		Notes:          input.Notes,
+		MilestoneID:     uint(id),
+		UserID:          userID,
+		IncrementValue:  input.IncrementValue,
+		PeriodReference: input.PeriodReference,
+		Notes:           input.Notes,
 	}
 	if err := dao.Database.Create(&progress).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})

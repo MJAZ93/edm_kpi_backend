@@ -3,7 +3,6 @@ package controller
 import (
 	"net/http"
 	"strconv"
-	"time"
 
 	"kpi-backend/dao"
 	"kpi-backend/model"
@@ -14,35 +13,64 @@ import (
 
 type ProjectController struct{}
 
-// attachProjectPerf looks up the current-month performance_cache entry for each
-// project in the slice and injects it as a synthetic "performance" field on the
-// returned JSON, so the frontend can show live execution/goal scores.
+func canAccessProject(scope *dao.UserScope, projectID uint) bool {
+	if scope.IsGlobal {
+		return true
+	}
+
+	var count int64
+	scope.ApplyToProjects(
+		dao.Database.Model(&model.Project{}).Where("id = ?", projectID),
+	).Count(&count)
+
+	return count > 0
+}
+
+// attachProjectPerf computes performance scores from each project's own
+// start_value / current_value / target_value and injects them as a
+// "performance" field so the frontend can render execution/goal bars.
 func attachProjectPerf(projects []model.Project) []gin.H {
-	perfDao := dao.PerformanceDao{}
-	now := time.Now()
-	period := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-
-	ids := make([]uint, len(projects))
-	for i, p := range projects {
-		ids[i] = p.ID
-	}
-
-	caches, _ := perfDao.GetScores("PROJECT", ids, period)
-	cacheMap := make(map[uint]model.PerformanceCache, len(caches))
-	for _, c := range caches {
-		cacheMap[c.EntityID] = c
-	}
-
 	out := make([]gin.H, len(projects))
 	for i, p := range projects {
 		m := projectToMap(p)
-		if pc, ok := cacheMap[p.ID]; ok {
-			m["performance"] = gin.H{
-				"execution_score": pc.ExecutionScore,
-				"goal_score":      pc.GoalScore,
-				"total_score":     pc.TotalScore,
-				"traffic_light":   pc.TrafficLight,
+
+		var goalScore, execScore float64
+
+		// Goal score from the project's own KPI fields
+		if p.StartValue != nil && p.TargetValue != nil && p.CurrentValue != nil {
+			goalScore = util.ComputeGoalScore(*p.StartValue, *p.TargetValue, *p.CurrentValue)
+		}
+
+		// Execution score from the project's tasks' milestones
+		var totalPlanned, totalAchieved float64
+		for _, t := range p.Tasks {
+			var taskPlanned, taskAchieved float64
+			var count float64
+			for _, ms := range t.Milestones {
+				if ms.Status != "BLOCKED" {
+					taskPlanned += ms.PlannedValue
+					taskAchieved += ms.AchievedValue
+					count++
+				}
 			}
+			// For AVG tasks, use the average of milestones (not the sum)
+			if t.AggregationType == "AVG" && count > 0 {
+				totalPlanned += taskPlanned / count
+				totalAchieved += taskAchieved / count
+			} else {
+				totalPlanned += taskPlanned
+				totalAchieved += taskAchieved
+			}
+		}
+		execScore = util.ComputeExecutionScore(totalPlanned, totalAchieved)
+
+		totalScore := util.ComputePerformanceScore(execScore, goalScore)
+
+		m["performance"] = gin.H{
+			"execution_score": execScore,
+			"goal_score":      goalScore,
+			"total_score":     totalScore,
+			"traffic_light":   util.GetTrafficLight(totalScore),
 		}
 		out[i] = m
 	}
@@ -52,27 +80,27 @@ func attachProjectPerf(projects []model.Project) []gin.H {
 // projectToMap converts a model.Project to a gin.H, preserving all existing JSON fields.
 func projectToMap(p model.Project) gin.H {
 	return gin.H{
-		"id":            p.ID,
-		"created_at":    p.CreatedAt,
-		"updated_at":    p.UpdatedAt,
-		"title":         p.Title,
-		"description":   p.Description,
-		"creator_type":  p.CreatorType,
+		"id":             p.ID,
+		"created_at":     p.CreatedAt,
+		"updated_at":     p.UpdatedAt,
+		"title":          p.Title,
+		"description":    p.Description,
+		"creator_type":   p.CreatorType,
 		"creator_org_id": p.CreatorOrgID,
-		"parent_id":     p.ParentID,
-		"parent":        p.Parent,
-		"weight":        p.Weight,
-		"status":        p.Status,
-		"created_by":    p.CreatedBy,
-		"creator":       p.Creator,
-		"start_date":    p.StartDate,
-		"end_date":      p.EndDate,
-		"direcoes":      p.Direcoes,
-		"goal_label":    p.GoalLabel,
-		"frequency":     p.Frequency,
-		"start_value":   p.StartValue,
-		"target_value":  p.TargetValue,
-		"current_value": p.CurrentValue,
+		"parent_id":      p.ParentID,
+		"parent":         p.Parent,
+		"weight":         p.Weight,
+		"status":         p.Status,
+		"created_by":     p.CreatedBy,
+		"creator":        p.Creator,
+		"start_date":     p.StartDate,
+		"end_date":       p.EndDate,
+		"direcoes":       p.Direcoes,
+		"goal_label":     p.GoalLabel,
+		"frequency":      p.Frequency,
+		"start_value":    p.StartValue,
+		"target_value":   p.TargetValue,
+		"current_value":  p.CurrentValue,
 	}
 }
 
@@ -135,6 +163,11 @@ type ProjectInput struct {
 }
 
 func (ProjectController) Create(c *gin.Context) {
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "department users cannot create projects"})
+		return
+	}
+
 	var input ProjectInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
@@ -176,9 +209,14 @@ func (ProjectController) Create(c *gin.Context) {
 		return
 	}
 
-	// Associate direcoes (for CA / PELOURO level projects)
-	if len(input.DirecaoIDs) > 0 {
-		if err := projectDao.SetDirecoes(project.ID, input.DirecaoIDs); err != nil {
+	// Associate direcoes
+	direcaoIDs := input.DirecaoIDs
+	// Auto-populate from creator_org_id for DIRECAO-level projects
+	if len(direcaoIDs) == 0 && input.CreatorType == "DIRECAO" && input.CreatorOrgID != nil {
+		direcaoIDs = []uint{*input.CreatorOrgID}
+	}
+	if len(direcaoIDs) > 0 {
+		if err := projectDao.SetDirecoes(project.ID, direcaoIDs); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 			return
 		}
@@ -195,6 +233,12 @@ func (ProjectController) Create(c *gin.Context) {
 
 func (ProjectController) Single(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
+	if !canAccessProject(&scope, uint(id)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
 	projectDao := dao.ProjectDao{}
 	project, err := projectDao.GetByID(uint(id))
 	if err != nil {
@@ -206,6 +250,17 @@ func (ProjectController) Single(c *gin.Context) {
 
 func (ProjectController) Update(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "department users cannot update projects"})
+		return
+	}
+
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
+	if !canAccessProject(&scope, uint(id)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
 	projectDao := dao.ProjectDao{}
 	project, err := projectDao.GetByID(uint(id))
 	if err != nil {
@@ -281,6 +336,17 @@ func (ProjectController) Update(c *gin.Context) {
 // Allows the responsible director to update the project's current_value.
 func (ProjectController) UpdateProgress(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "department users cannot update project progress"})
+		return
+	}
+
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
+	if !canAccessProject(&scope, uint(id)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
 	projectDao := dao.ProjectDao{}
 	project, err := projectDao.GetByID(uint(id))
 	if err != nil {
@@ -314,6 +380,17 @@ func (ProjectController) UpdateProgress(c *gin.Context) {
 
 func (ProjectController) Delete(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "department users cannot delete projects"})
+		return
+	}
+
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
+	if !canAccessProject(&scope, uint(id)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
 	projectDao := dao.ProjectDao{}
 
 	project, err := projectDao.GetByID(uint(id))
@@ -335,6 +412,12 @@ func (ProjectController) Delete(c *gin.Context) {
 
 func (ProjectController) Tree(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	scope := dao.ResolveScope(util.ExtractUserID(c), util.ExtractRole(c))
+	if !canAccessProject(&scope, uint(id)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
 	projectDao := dao.ProjectDao{}
 	project, err := projectDao.GetTree(uint(id))
 	if err != nil {

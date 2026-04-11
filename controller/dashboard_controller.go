@@ -884,7 +884,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		  AND t.current_value <= t.start_value
 		  AND t.start_date < NOW() - INTERVAL '7 days'
 		ORDER BY days_elapsed DESC
-		LIMIT 10
+		LIMIT 6
 	`, dir.ID).Scan(&stalledTasks)
 	if stalledTasks == nil {
 		stalledTasks = []StalledTask{}
@@ -1109,11 +1109,15 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		ProjectTitle  string  `json:"project_title"`
 		GoalLabel     string  `json:"goal_label"`
 		Frequency     string  `json:"frequency"`
+		AssignedTo    *uint   `json:"assigned_to,omitempty"`
+		AssigneeName  string  `json:"assignee_name,omitempty"`
 		CreatedBy     uint    `json:"created_by"`
 		CreatorRole   string  `json:"creator_role"`
 		ProgressPct   float64 `json:"progress_pct"`
 		DaysElapsed   int     `json:"days_elapsed"`
 		DaysRemaining int     `json:"days_remaining"`
+		IsOverdue     bool    `json:"is_overdue"`
+		OverdueDays   int     `json:"overdue_days"`
 	}
 	var taskRows []TaskRow
 	dao.Database.Raw(`
@@ -1121,6 +1125,8 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		       COALESCE(p.title,'') AS project_title,
 		       COALESCE(t.goal_label,'') AS goal_label,
 		       COALESCE(t.frequency,'') AS frequency,
+		       t.assigned_to,
+		       COALESCE(assignee.name, '') AS assignee_name,
 		       t.created_by,
 		       u.role AS creator_role,
 		       CASE WHEN (t.target_value - COALESCE(t.start_value,0)) = 0 THEN 0
@@ -1129,10 +1135,39 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		       GREATEST(0, EXTRACT(DAY FROM NOW() - t.start_date)::int) AS days_elapsed,
 		       CASE WHEN t.end_date IS NULL THEN 0
 		            ELSE GREATEST(0, EXTRACT(DAY FROM t.end_date - NOW())::int)
-		       END AS days_remaining
+		       END AS days_remaining,
+		       CASE
+		           WHEN t.status != 'ACTIVE' THEN false
+		           ELSE COALESCE(t.next_update_due,
+		               CASE COALESCE(t.frequency, '')
+		                   WHEN 'DAILY' THEN t.updated_at + INTERVAL '1 day'
+		                   WHEN 'WEEKLY' THEN t.updated_at + INTERVAL '7 days'
+		                   WHEN 'MONTHLY' THEN t.updated_at + INTERVAL '1 month'
+		                   WHEN 'QUARTERLY' THEN t.updated_at + INTERVAL '3 months'
+		                   WHEN 'BIANNUAL' THEN t.updated_at + INTERVAL '6 months'
+		                   WHEN 'ANNUAL' THEN t.updated_at + INTERVAL '1 year'
+		                   ELSE t.updated_at + INTERVAL '1 month'
+		               END
+		           ) < NOW()
+		       END AS is_overdue,
+		       CASE
+		           WHEN t.status != 'ACTIVE' THEN 0
+		           ELSE GREATEST(0, EXTRACT(DAY FROM NOW() - COALESCE(t.next_update_due,
+		               CASE COALESCE(t.frequency, '')
+		                   WHEN 'DAILY' THEN t.updated_at + INTERVAL '1 day'
+		                   WHEN 'WEEKLY' THEN t.updated_at + INTERVAL '7 days'
+		                   WHEN 'MONTHLY' THEN t.updated_at + INTERVAL '1 month'
+		                   WHEN 'QUARTERLY' THEN t.updated_at + INTERVAL '3 months'
+		                   WHEN 'BIANNUAL' THEN t.updated_at + INTERVAL '6 months'
+		                   WHEN 'ANNUAL' THEN t.updated_at + INTERVAL '1 year'
+		                   ELSE t.updated_at + INTERVAL '1 month'
+		               END
+		           )))::int
+		       END AS overdue_days
 		FROM tasks t
 		LEFT JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
 		LEFT JOIN users u ON u.id = t.created_by
+		LEFT JOIN users assignee ON assignee.id = t.assigned_to
 		WHERE t.owner_type = 'DEPARTAMENTO' AND t.owner_id = ?
 		  AND t.deleted_at IS NULL
 		ORDER BY t.created_at DESC
@@ -1156,32 +1191,48 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		ProjectTitle   string     `json:"project_title"`
 		GoalLabel      string     `json:"goal_label"`
 		Frequency      string     `json:"frequency"`
+		AssignedTo     *uint      `json:"assigned_to,omitempty"`
+		AssigneeName   string     `json:"assignee_name,omitempty"`
 		ProgressPct    float64    `json:"progress_pct"`
 		DaysElapsed    int        `json:"days_elapsed"`
 		DaysRemaining  int        `json:"days_remaining"`
+		IsOverdue      bool       `json:"is_overdue"`
+		OverdueDays    int        `json:"overdue_days"`
 		IsFromDirector bool       `json:"is_from_director"`
 		IsUnassigned   bool       `json:"is_unassigned"`
 		Assignees      []Assignee `json:"assignees"`
 	}
 
+	type OverdueTaskItem struct {
+		ID           uint   `json:"id"`
+		Title        string `json:"title"`
+		ProjectTitle string `json:"project_title"`
+		AssigneeName string `json:"assignee_name,omitempty"`
+		Frequency    string `json:"frequency"`
+		OverdueDays  int    `json:"overdue_days"`
+	}
+
 	var (
 		taskItems         []TaskItem
+		overdueTasks      []OverdueTaskItem
 		unassignedCount   int
 		fromDirectorCount int
 		activeCount       int
+		overdueCount      int
 	)
 
 	for _, tr := range taskRows {
 		var assignees []Assignee
 		dao.Database.Raw(`
-			SELECT COALESCE(m.created_by, m.updated_by) AS user_id, u.name,
+			SELECT COALESCE(m.assigned_to, t.assigned_to) AS user_id, u.name,
 			       COUNT(*) AS ms_total,
 			       SUM(CASE WHEN m.status='DONE' THEN 1 ELSE 0 END) AS ms_done
 			FROM milestones m
-			JOIN users u ON u.id = COALESCE(m.created_by, m.updated_by)
+			JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+			JOIN users u ON u.id = COALESCE(m.assigned_to, t.assigned_to)
 			WHERE m.task_id = ? AND m.deleted_at IS NULL
-			  AND COALESCE(m.created_by, m.updated_by) IS NOT NULL
-			GROUP BY COALESCE(m.created_by, m.updated_by), u.name
+			  AND COALESCE(m.assigned_to, t.assigned_to) IS NOT NULL
+			GROUP BY COALESCE(m.assigned_to, t.assigned_to), u.name
 		`, tr.ID).Scan(&assignees)
 		if assignees == nil {
 			assignees = []Assignee{}
@@ -1199,6 +1250,17 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		if tr.Status == "ACTIVE" {
 			activeCount++
 		}
+		if tr.IsOverdue {
+			overdueCount++
+			overdueTasks = append(overdueTasks, OverdueTaskItem{
+				ID:           tr.ID,
+				Title:        tr.Title,
+				ProjectTitle: tr.ProjectTitle,
+				AssigneeName: tr.AssigneeName,
+				Frequency:    tr.Frequency,
+				OverdueDays:  tr.OverdueDays,
+			})
+		}
 
 		taskItems = append(taskItems, TaskItem{
 			ID:             tr.ID,
@@ -1207,9 +1269,13 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 			ProjectTitle:   tr.ProjectTitle,
 			GoalLabel:      tr.GoalLabel,
 			Frequency:      tr.Frequency,
+			AssignedTo:     tr.AssignedTo,
+			AssigneeName:   tr.AssigneeName,
 			ProgressPct:    tr.ProgressPct,
 			DaysElapsed:    tr.DaysElapsed,
 			DaysRemaining:  tr.DaysRemaining,
+			IsOverdue:      tr.IsOverdue,
+			OverdueDays:    tr.OverdueDays,
 			IsFromDirector: isFromDirector,
 			IsUnassigned:   isUnassigned,
 			Assignees:      assignees,
@@ -1217,6 +1283,66 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 	}
 	if taskItems == nil {
 		taskItems = []TaskItem{}
+	}
+	if overdueTasks == nil {
+		overdueTasks = []OverdueTaskItem{}
+	}
+
+	type OverdueMilestoneItem struct {
+		ID           uint   `json:"id"`
+		Title        string `json:"title"`
+		TaskID       uint   `json:"task_id"`
+		TaskTitle    string `json:"task_title"`
+		ProjectTitle string `json:"project_title"`
+		AssigneeName string `json:"assignee_name,omitempty"`
+		Frequency    string `json:"frequency"`
+		OverdueDays  int    `json:"overdue_days"`
+	}
+
+	var overdueMilestones []OverdueMilestoneItem
+	dao.Database.Raw(`
+		SELECT m.id, m.title,
+		       t.id AS task_id,
+		       t.title AS task_title,
+		       COALESCE(p.title, '') AS project_title,
+		       COALESCE(ms_assignee.name, task_assignee.name, '') AS assignee_name,
+		       COALESCE(m.frequency, t.frequency, '') AS frequency,
+		       GREATEST(0, EXTRACT(DAY FROM NOW() - (
+		           CASE COALESCE(m.frequency, t.frequency, '')
+		               WHEN 'DAILY' THEN m.updated_at + INTERVAL '1 day'
+		               WHEN 'WEEKLY' THEN m.updated_at + INTERVAL '7 days'
+		               WHEN 'MONTHLY' THEN m.updated_at + INTERVAL '1 month'
+		               WHEN 'QUARTERLY' THEN m.updated_at + INTERVAL '3 months'
+		               WHEN 'BIANNUAL' THEN m.updated_at + INTERVAL '6 months'
+		               WHEN 'ANNUAL' THEN m.updated_at + INTERVAL '1 year'
+		               ELSE m.updated_at + INTERVAL '1 month'
+		           END
+		       )))::int AS overdue_days
+		FROM milestones m
+		JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+		LEFT JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		LEFT JOIN users ms_assignee ON ms_assignee.id = m.assigned_to
+		LEFT JOIN users task_assignee ON task_assignee.id = t.assigned_to
+		WHERE t.owner_type = 'DEPARTAMENTO' AND t.owner_id = ?
+		  AND t.status = 'ACTIVE'
+		  AND m.status = 'PENDING'
+		  AND m.deleted_at IS NULL
+		  AND (
+		      CASE COALESCE(m.frequency, t.frequency, '')
+		          WHEN 'DAILY' THEN m.updated_at + INTERVAL '1 day'
+		          WHEN 'WEEKLY' THEN m.updated_at + INTERVAL '7 days'
+		          WHEN 'MONTHLY' THEN m.updated_at + INTERVAL '1 month'
+		          WHEN 'QUARTERLY' THEN m.updated_at + INTERVAL '3 months'
+		          WHEN 'BIANNUAL' THEN m.updated_at + INTERVAL '6 months'
+		          WHEN 'ANNUAL' THEN m.updated_at + INTERVAL '1 year'
+		          ELSE m.updated_at + INTERVAL '1 month'
+		      END
+		  ) < NOW()
+		ORDER BY overdue_days DESC, m.updated_at ASC
+		LIMIT 12
+	`, dept.ID).Scan(&overdueMilestones)
+	if overdueMilestones == nil {
+		overdueMilestones = []OverdueMilestoneItem{}
 	}
 
 	// ── Pending blockers for this department ─────────────────────────────────
@@ -1231,7 +1357,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 	var blockerItems []BlockerItem
 	dao.Database.Raw(`
 		SELECT bl.id, bl.entity_type,
-		       COALESCE(bl.entity_title, t.title, '') AS entity_title,
+		       COALESCE(m.title, t.title, '') AS entity_title,
 		       bl.blocker_type, bl.description,
 		       bl.created_at::text AS created_at
 		FROM blockers bl
@@ -1239,6 +1365,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		    (bl.entity_type = 'TASK' AND t.id = bl.entity_id)
 		 OR (bl.entity_type = 'MILESTONE' AND t.id = (SELECT task_id FROM milestones WHERE id = bl.entity_id LIMIT 1))
 		)
+		LEFT JOIN milestones m ON bl.entity_type = 'MILESTONE' AND m.id = bl.entity_id AND m.deleted_at IS NULL
 		WHERE t.owner_type = 'DEPARTAMENTO' AND t.owner_id = ?
 		  AND bl.status = 'PENDING' AND bl.deleted_at IS NULL AND t.deleted_at IS NULL
 		ORDER BY bl.created_at DESC LIMIT 10
@@ -1276,13 +1403,17 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 			"traffic_light":   lDept,
 			"direcao_id":      direcaoID,
 		},
-		"tasks":            taskItems,
-		"pending_blockers": blockerItems,
+		"tasks":              taskItems,
+		"overdue_tasks":      overdueTasks,
+		"overdue_milestones": overdueMilestones,
+		"pending_blockers":   blockerItems,
 		"stats": gin.H{
-			"total":         len(taskItems),
-			"unassigned":    unassignedCount,
-			"from_director": fromDirectorCount,
-			"active":        activeCount,
+			"total":              len(taskItems),
+			"unassigned":         unassignedCount,
+			"from_director":      fromDirectorCount,
+			"active":             activeCount,
+			"overdue":            overdueCount,
+			"overdue_milestones": len(overdueMilestones),
 		},
 		"users": deptUsers,
 	})

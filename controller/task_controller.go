@@ -28,20 +28,21 @@ func (TaskController) ListByProject(c *gin.Context) {
 }
 
 type TaskInput struct {
-	Title        string       `json:"title" binding:"required"`
-	Description  string       `json:"description"`
-	OwnerType    string       `json:"owner_type" binding:"required,oneof=DIRECAO DEPARTAMENTO"`
-	OwnerID      uint         `json:"owner_id" binding:"required"`
-	AssignedTo   *uint        `json:"assigned_to"`
-	Frequency    string       `json:"frequency" binding:"required,oneof=DAILY WEEKLY MONTHLY QUARTERLY BIANNUAL ANNUAL"`
-	GoalLabel    string       `json:"goal_label"`
-	StartValue   *float64     `json:"start_value"`
-	TargetValue  float64      `json:"target_value" binding:"required"`
-	Weight       float64      `json:"weight"`
-	StartDate    *string      `json:"start_date"`
-	EndDate      *string      `json:"end_date"`
-	ParentTaskID *uint        `json:"parent_task_id"`
-	Scopes       []ScopeInput `json:"scopes"`
+	Title           string       `json:"title" binding:"required"`
+	Description     string       `json:"description"`
+	OwnerType       string       `json:"owner_type" binding:"required,oneof=DIRECAO DEPARTAMENTO"`
+	OwnerID         uint         `json:"owner_id" binding:"required"`
+	AssignedTo      *uint        `json:"assigned_to"`
+	Frequency       string       `json:"frequency" binding:"required,oneof=DAILY WEEKLY MONTHLY QUARTERLY BIANNUAL ANNUAL"`
+	GoalLabel       string       `json:"goal_label"`
+	StartValue      *float64     `json:"start_value"`
+	TargetValue     float64      `json:"target_value" binding:"required"`
+	AggregationType string       `json:"aggregation_type"` // SUM_UP (default), SUM_DOWN, AVG
+	Weight          float64      `json:"weight"`
+	StartDate       *string      `json:"start_date"`
+	EndDate         *string      `json:"end_date"`
+	ParentTaskID    *uint        `json:"parent_task_id"`
+	Scopes          []ScopeInput `json:"scopes"`
 }
 
 type ScopeInput struct {
@@ -88,21 +89,27 @@ func (TaskController) Create(c *gin.Context) {
 		return
 	}
 
+	aggType := input.AggregationType
+	if aggType == "" {
+		aggType = "SUM_UP"
+	}
+
 	task := model.Task{
-		ProjectID:    uint(projectID),
-		Title:        input.Title,
-		Description:  input.Description,
-		OwnerType:    input.OwnerType,
-		OwnerID:      input.OwnerID,
-		AssignedTo:   input.AssignedTo,
-		Frequency:    input.Frequency,
-		GoalLabel:    input.GoalLabel,
-		StartValue:   input.StartValue,
-		TargetValue:  input.TargetValue,
-		Weight:       input.Weight,
-		ParentTaskID: input.ParentTaskID,
-		Status:       "ACTIVE",
-		CreatedBy:    util.ExtractUserID(c),
+		ProjectID:       uint(projectID),
+		Title:           input.Title,
+		Description:     input.Description,
+		OwnerType:       input.OwnerType,
+		OwnerID:         input.OwnerID,
+		AssignedTo:      input.AssignedTo,
+		Frequency:       input.Frequency,
+		GoalLabel:       input.GoalLabel,
+		StartValue:      input.StartValue,
+		TargetValue:     input.TargetValue,
+		AggregationType: aggType,
+		Weight:          input.Weight,
+		ParentTaskID:    input.ParentTaskID,
+		Status:          "ACTIVE",
+		CreatedBy:       util.ExtractUserID(c),
 	}
 
 	if task.Weight == 0 {
@@ -189,6 +196,9 @@ func (TaskController) Update(c *gin.Context) {
 	task.GoalLabel = input.GoalLabel
 	task.StartValue = input.StartValue
 	task.TargetValue = input.TargetValue
+	if input.AggregationType != "" {
+		task.AggregationType = input.AggregationType
+	}
 	if input.Weight > 0 {
 		task.Weight = input.Weight
 	}
@@ -206,6 +216,17 @@ func (TaskController) Update(c *gin.Context) {
 	if err := taskDao.Update(&task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
+	}
+
+	// Recalculate current_value if aggregation type or start_value changed
+	startChanged := (task.StartValue == nil) != (oldData.StartValue == nil) ||
+		(task.StartValue != nil && oldData.StartValue != nil && *task.StartValue != *oldData.StartValue)
+	if task.AggregationType != oldData.AggregationType || startChanged {
+		taskDao.RecalcCurrentValue(task.ID)
+		// Also refresh performance cache
+		perfDao := dao.PerformanceDao{}
+		go perfDao.RefreshForTask(task.ID)
+		go perfDao.RefreshForProject(task.ProjectID)
 	}
 
 	// Update scopes

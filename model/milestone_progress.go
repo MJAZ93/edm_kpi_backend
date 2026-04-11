@@ -7,10 +7,11 @@ import "gorm.io/gorm"
 // the milestone's current achieved_value.
 type MilestoneProgress struct {
 	gorm.Model
-	MilestoneID    uint    `gorm:"not null;index" json:"milestone_id"`
-	UserID         uint    `gorm:"not null" json:"user_id"`
-	User           *User   `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	IncrementValue float64 `gorm:"type:decimal(15,2);not null" json:"increment_value"`
-	Notes          string  `gorm:"type:text" json:"notes,omitempty"`
-	PhotoURL       string  `gorm:"size:1000" json:"photo_url,omitempty"`
+	MilestoneID      uint    `gorm:"not null;index" json:"milestone_id"`
+	UserID           uint    `gorm:"not null" json:"user_id"`
+	User             *User   `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	IncrementValue   float64 `gorm:"type:decimal(15,2);not null" json:"increment_value"`
+	PeriodReference  string  `gorm:"size:20" json:"period_reference,omitempty"` // e.g. "2026-01" for January 2026
+	Notes            string  `gorm:"type:text" json:"notes,omitempty"`
+	PhotoURL         string  `gorm:"size:1000" json:"photo_url,omitempty"`
 }
