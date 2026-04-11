@@ -49,6 +49,13 @@ func (d *GeoDao) GetAllRegioes() ([]model.Regiao, error) {
 	return list, err
 }
 
+// GetAllRegioesLight returns only id, name, code — no relations, no polygon.
+func (d *GeoDao) GetAllRegioesLight() ([]model.Regiao, error) {
+	var list []model.Regiao
+	err := Database.Select("id, name, code").Order("name ASC").Find(&list).Error
+	return list, err
+}
+
 // --- ASCs ---
 
 func (d *GeoDao) CreateASC(a *model.ASC) error {
@@ -97,5 +104,12 @@ func (d *GeoDao) GetASCByDirector(userID uint) (model.ASC, error) {
 func (d *GeoDao) GetAllASCs() ([]model.ASC, error) {
 	var list []model.ASC
 	err := Database.Preload("Responsible").Preload("Director").Preload("Regiao").Order("name ASC").Find(&list).Error
+	return list, err
+}
+
+// GetAllASCsLight returns only id, name, code, regiao_id — no relations, no polygon.
+func (d *GeoDao) GetAllASCsLight() ([]model.ASC, error) {
+	var list []model.ASC
+	err := Database.Select("id, name, code, regiao_id").Order("name ASC").Find(&list).Error
 	return list, err
 }

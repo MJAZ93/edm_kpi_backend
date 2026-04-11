@@ -18,7 +18,20 @@ type GeoController struct{}
 
 func (GeoController) ListRegioes(c *gin.Context) {
 	geoDao := dao.GeoDao{}
-	list, err := geoDao.GetAllRegioes()
+
+	if c.Query("include_polygon") == "true" {
+		// Full response with polygons + relations (heavy)
+		list, err := geoDao.GetAllRegioes()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": list, "total": len(list)})
+		return
+	}
+
+	// Light response: only id, name, code (fast, tiny payload)
+	list, err := geoDao.GetAllRegioesLight()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -138,7 +151,20 @@ func (GeoController) DeleteRegiao(c *gin.Context) {
 
 func (GeoController) ListASCs(c *gin.Context) {
 	geoDao := dao.GeoDao{}
-	list, err := geoDao.GetAllASCs()
+
+	if c.Query("include_polygon") == "true" {
+		// Full response with polygons + relations (heavy)
+		list, err := geoDao.GetAllASCs()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": list, "total": len(list)})
+		return
+	}
+
+	// Light response: only id, name, code, regiao_id (fast, tiny payload)
+	list, err := geoDao.GetAllASCsLight()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
