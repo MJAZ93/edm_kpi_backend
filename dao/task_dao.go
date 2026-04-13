@@ -88,8 +88,20 @@ func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
 			UPDATE tasks SET current_value = (
 				SELECT COALESCE(AVG(achieved_value), 0)
 				FROM milestones
-				WHERE task_id = ? AND deleted_at IS NULL
+				WHERE task_id = ? AND deleted_at IS NULL AND achieved_value != 0
 			), updated_at = NOW()
+			WHERE id = ?
+		`, taskID, taskID).Error
+
+	case "LAST":
+		return Database.Exec(`
+			UPDATE tasks SET current_value = COALESCE((
+				SELECT achieved_value
+				FROM milestones
+				WHERE task_id = ? AND deleted_at IS NULL AND achieved_value != 0
+				ORDER BY updated_at DESC
+				LIMIT 1
+			), 0), updated_at = NOW()
 			WHERE id = ?
 		`, taskID, taskID).Error
 

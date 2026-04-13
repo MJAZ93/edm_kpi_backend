@@ -10,6 +10,7 @@ type PerformanceDao struct{}
 
 // taskExecScore computes execution score for a task, respecting aggregation_type.
 // For AVG tasks the planned/achieved are averaged across milestones instead of summed.
+// For reduction goals (target < start), uses inverted formula where lower achieved = better.
 func taskExecScore(t model.Task, milestones []model.Milestone) float64 {
 	var planned, achieved float64
 	for _, m := range milestones {
@@ -21,6 +22,16 @@ func taskExecScore(t model.Task, milestones []model.Milestone) float64 {
 		planned = planned / n
 		achieved = achieved / n
 	}
+
+	// Detect reduction goal: target < start → lower achieved = better
+	startVal := float64(0)
+	if t.StartValue != nil {
+		startVal = *t.StartValue
+	}
+	if t.TargetValue < startVal {
+		return util.ComputeExecutionScoreReduction(planned, achieved)
+	}
+
 	return util.ComputeExecutionScore(planned, achieved)
 }
 

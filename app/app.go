@@ -14,6 +14,9 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Version is set at build time via -ldflags or defaults to "dev".
+var Version = "1.3.0"
+
 func LoadEnv() {
 	if err := godotenv.Load(".env"); err != nil {
 		log.Fatal("failed loading .env: ", err)
@@ -50,6 +53,7 @@ func LoadDatabase() error {
 	}
 
 	dao.SetupIndexes()
+	dao.RunMigrations()
 	return nil
 }
 

@@ -15,6 +15,10 @@ func PublicRoutes(r *gin.RouterGroup) {
 	authSvc.Login(r, "login")
 	authSvc.ForgotPassword(r, "forgot-password")
 	authSvc.ResetPassword(r, "reset-password")
+
+	r.GET("/version", func(c *gin.Context) {
+		c.JSON(200, gin.H{"version": Version})
+	})
 }
 
 func PrivateRoutes(r *gin.RouterGroup) {

@@ -389,10 +389,22 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 	ms.AchievedValue += input.IncrementValue
 	ms.UpdatedBy = &userID
 
-	// Update status if provided
+	// Detect reduction goal from parent task (target < start)
+	taskDao := dao.TaskDao{}
+	parentTask, _ := taskDao.GetByID(ms.TaskID)
+	isReduction := false
+	if parentTask.StartValue != nil && parentTask.TargetValue < *parentTask.StartValue {
+		isReduction = true
+	}
+
+	// Update status if provided; otherwise auto-complete based on goal direction
 	if input.Status != "" {
 		ms.Status = input.Status
-	} else if ms.AchievedValue >= ms.PlannedValue {
+	} else if isReduction && ms.AchievedValue <= ms.PlannedValue {
+		// Reduction goal: achieved at or below planned target = done
+		ms.Status = "DONE"
+	} else if !isReduction && ms.AchievedValue >= ms.PlannedValue {
+		// Growth goal: achieved at or above planned target = done
 		ms.Status = "DONE"
 	}
 
@@ -402,7 +414,6 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 	}
 
 	// Recalculate parent task current_value (sum of all milestone achieved_values)
-	taskDao := dao.TaskDao{}
 	taskDao.RecalcCurrentValue(ms.TaskID)
 
 	// Refresh performance cache asynchronously
@@ -410,8 +421,7 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 	go perfDao.RefreshForTask(ms.TaskID)
 
 	// Notify up the chain
-	task, _ := taskDao.GetByID(ms.TaskID)
-	go notifyTaskUpdateChain(task, userID)
+	go notifyTaskUpdateChain(parentTask, userID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"milestone":      ms,

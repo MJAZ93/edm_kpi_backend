@@ -31,7 +31,14 @@ func ForecastTask(taskID uint, title string, startValue, targetValue, currentVal
 	velocity := (currentValue - startValue) / float64(daysElapsed)
 	projectedFinal := currentValue + (velocity * float64(daysRemaining))
 
-	willReach := projectedFinal >= targetValue
+	// Handle both growth goals (target > start) and reduction goals (target < start)
+	isReduction := targetValue < startValue
+	var willReach bool
+	if isReduction {
+		willReach = projectedFinal <= targetValue
+	} else {
+		willReach = projectedFinal >= targetValue
+	}
 
 	result := ForecastResult{
 		TaskID:              taskID,
@@ -48,10 +55,18 @@ func ForecastTask(taskID uint, title string, startValue, targetValue, currentVal
 		WillReachTarget:     willReach,
 	}
 
-	if projectedFinal < targetValue*0.9 {
+	// Compute goal progress percentage for the alert
+	diff := targetValue - startValue
+	var atRisk bool
+	if diff != 0 {
+		goalPct := ((projectedFinal - startValue) / diff) * 100
+		atRisk = goalPct < 90
+	}
+
+	if atRisk {
 		alert := "FORECAST_RISK"
-		pct := math.Round((projectedFinal / targetValue) * 100)
-		msg := fmt.Sprintf("Ao ritmo actual, a tarefa irá atingir apenas %.0f%% do objectivo.", pct)
+		goalPct := math.Round(((projectedFinal - startValue) / diff) * 100)
+		msg := fmt.Sprintf("Ao ritmo actual, a tarefa irá atingir apenas %.0f%% do objectivo.", goalPct)
 		result.Alert = &alert
 		result.AlertMessage = &msg
 	}

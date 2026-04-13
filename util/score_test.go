@@ -40,12 +40,18 @@ func TestComputeGoalScore(t *testing.T) {
 		{"over achieved capped", 0, 50000, 60000, 100},
 		{"reduction goal", 78, 73, 75, 60},
 		{"same start/target", 50, 50, 50, 100},
+		// Negative progress: going opposite direction of target
+		{"negative growth", 0, 100, -20, -20},
+		{"negative reduction", 24.4, 21.3, 26, -51.61},
+		{"extreme negative clamped", 0, 100, -500, -100},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := ComputeGoalScore(tt.start, tt.target, tt.current)
-			if result != tt.expected {
+			// Use tolerance for float comparison
+			diff := result - tt.expected
+			if diff < -0.01 || diff > 0.01 {
 				t.Errorf("got %.2f, want %.2f", result, tt.expected)
 			}
 		})

@@ -37,3 +37,11 @@ func SetupIndexes() {
 	Database.Exec("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);")
 	Database.Exec("CREATE INDEX IF NOT EXISTS idx_performance_cache_entity ON performance_caches(entity_type, entity_id, period);")
 }
+
+// RunMigrations applies column-type changes that AutoMigrate cannot handle.
+func RunMigrations() {
+	// Widen score columns from decimal(5,2) to decimal(10,2) to support negative scores
+	Database.Exec("ALTER TABLE performance_caches ALTER COLUMN execution_score TYPE decimal(10,2);")
+	Database.Exec("ALTER TABLE performance_caches ALTER COLUMN goal_score TYPE decimal(10,2);")
+	Database.Exec("ALTER TABLE performance_caches ALTER COLUMN total_score TYPE decimal(10,2);")
+}
