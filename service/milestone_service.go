@@ -42,3 +42,7 @@ func (s MilestoneService) AddProgress(r *gin.RouterGroup, _ string) {
 func (s MilestoneService) ListProgress(r *gin.RouterGroup, _ string) {
 	r.GET("/"+s.Route+"/:id/progress", s.Controller.ListProgress)
 }
+
+func (s MilestoneService) UpdateProgress(r *gin.RouterGroup, _ string) {
+	r.PUT("/"+s.Route+"/progress/:progress_id", s.Controller.UpdateProgress)
+}

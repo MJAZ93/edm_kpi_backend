@@ -9,18 +9,45 @@ import (
 type PerformanceDao struct{}
 
 // taskExecScore computes execution score for a task, respecting aggregation_type.
-// For AVG tasks the planned/achieved are averaged across milestones instead of summed.
+// SUM_UP (default): sum planned/achieved across milestones.
+// AVG: average planned/achieved across milestones.
+// LAST: only the latest milestone counts (by planned_date desc, then updated_at desc).
 // For reduction goals (target < start), uses inverted formula where lower achieved = better.
 func taskExecScore(t model.Task, milestones []model.Milestone) float64 {
-	var planned, achieved float64
-	for _, m := range milestones {
-		planned += m.PlannedValue
-		achieved += m.AchievedValue
+	if len(milestones) == 0 {
+		return 0
 	}
-	if t.AggregationType == "AVG" && len(milestones) > 0 {
+
+	var planned, achieved float64
+
+	switch t.AggregationType {
+	case "AVG":
+		for _, m := range milestones {
+			planned += m.PlannedValue
+			achieved += m.AchievedValue
+		}
 		n := float64(len(milestones))
 		planned = planned / n
 		achieved = achieved / n
+
+	case "LAST":
+		// Use the latest milestone (highest planned_date, then latest updated)
+		latest := milestones[0]
+		for _, m := range milestones[1:] {
+			if m.PlannedDate.After(latest.PlannedDate) {
+				latest = m
+			} else if m.PlannedDate.Equal(latest.PlannedDate) && m.UpdatedAt.After(latest.UpdatedAt) {
+				latest = m
+			}
+		}
+		planned = latest.PlannedValue
+		achieved = latest.AchievedValue
+
+	default: // SUM_UP, SUM_DOWN, MANUAL
+		for _, m := range milestones {
+			planned += m.PlannedValue
+			achieved += m.AchievedValue
+		}
 	}
 
 	// Detect reduction goal: target < start → lower achieved = better
@@ -310,6 +337,69 @@ func (d *PerformanceDao) ComputeScoreForRegiao(regiaoID uint) (execScore, goalSc
 	n := float64(len(ascs))
 	execScore = sumExec / n
 	goalScore = sumGoal / n
+	totalScore = util.ComputePerformanceScore(execScore, goalScore)
+	trafficLight = util.GetTrafficLight(totalScore)
+	return
+}
+
+// ComputeScoreForDirecaoFromProjects computes direction scores as a weighted
+// average of its projects' (pilares') scores. Each project's execution score
+// comes from its tasks' milestones, and its goal score from its own KPI fields
+// (start_value, current_value, target_value). This ensures the direction
+// summary matches what is displayed in the pilares list.
+func (d *PerformanceDao) ComputeScoreForDirecaoFromProjects(direcaoID uint) (execScore, goalScore, totalScore float64, trafficLight string) {
+	projectDao := ProjectDao{}
+	milestoneDao := MilestoneDao{}
+
+	projects, err := projectDao.ListByDirecao(direcaoID)
+	if err != nil || len(projects) == 0 {
+		return 0, 0, 0, "RED"
+	}
+
+	// Need tasks with milestones for each project
+	var sumExec, sumGoal, totalWeight float64
+	for _, p := range projects {
+		// Load tasks with milestones for this project
+		var tasks []model.Task
+		Database.Preload("Milestones").Where("project_id = ? AND deleted_at IS NULL", p.ID).Find(&tasks)
+
+		// Project execution score: weighted average of task execution scores
+		var projSumExec, projTotalWeight float64
+		for _, t := range tasks {
+			nonBlocked, _ := milestoneDao.GetNonBlockedByTask(t.ID)
+			exec := taskExecScore(t, nonBlocked)
+			w := t.Weight
+			if w <= 0 {
+				w = 100
+			}
+			projSumExec += exec * w
+			projTotalWeight += w
+		}
+		var projExec float64
+		if projTotalWeight > 0 {
+			projExec = projSumExec / projTotalWeight
+		}
+
+		// Project goal score from its own KPI fields
+		var projGoal float64
+		if p.StartValue != nil && p.TargetValue != nil && p.CurrentValue != nil {
+			projGoal = util.ComputeGoalScore(*p.StartValue, *p.TargetValue, *p.CurrentValue)
+		}
+
+		pw := p.Weight
+		if pw <= 0 {
+			pw = 100
+		}
+		sumExec += projExec * pw
+		sumGoal += projGoal * pw
+		totalWeight += pw
+	}
+
+	if totalWeight == 0 {
+		return 0, 0, 0, "RED"
+	}
+	execScore = sumExec / totalWeight
+	goalScore = sumGoal / totalWeight
 	totalScore = util.ComputePerformanceScore(execScore, goalScore)
 	trafficLight = util.GetTrafficLight(totalScore)
 	return

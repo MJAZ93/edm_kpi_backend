@@ -43,15 +43,16 @@ func (MilestoneController) ListByTask(c *gin.Context) {
 }
 
 type MilestoneInput struct {
-	Title        string  `json:"title" binding:"required"`
-	Description  string  `json:"description"`
-	ScopeType    string  `json:"scope_type"`
-	ScopeID      *uint   `json:"scope_id"`
-	Frequency    string  `json:"frequency"`
-	PlannedValue float64 `json:"planned_value" binding:"required"`
-	PlannedDate  string  `json:"planned_date" binding:"required"`
-	Notes        string  `json:"notes"`
-	AssignedTo   *uint   `json:"assigned_to"`
+	Title           string  `json:"title" binding:"required"`
+	Description     string  `json:"description"`
+	ScopeType       string  `json:"scope_type"`
+	ScopeID         *uint   `json:"scope_id"`
+	Frequency       string  `json:"frequency"`
+	PlannedValue    float64 `json:"planned_value" binding:"required"`
+	PlannedDate     string  `json:"planned_date" binding:"required"`
+	Notes           string  `json:"notes"`
+	AssignedTo      *uint   `json:"assigned_to"`
+	AggregationType string  `json:"aggregation_type"` // SUM_UP (default), AVG, LAST, MANUAL
 }
 
 func normalizeFrequency(input, fallback string) (string, error) {
@@ -127,19 +128,24 @@ func (MilestoneController) Create(c *gin.Context) {
 		return
 	}
 
+	aggType := input.AggregationType
+	if aggType == "" {
+		aggType = "SUM_UP"
+	}
 	milestone := model.Milestone{
-		TaskID:       uint(taskID),
-		Title:        input.Title,
-		Description:  input.Description,
-		ScopeType:    input.ScopeType,
-		ScopeID:      input.ScopeID,
-		Frequency:    frequency,
-		PlannedValue: input.PlannedValue,
-		PlannedDate:  *plannedDate,
-		Notes:        input.Notes,
-		AssignedTo:   input.AssignedTo,
-		Status:       "PENDING",
-		CreatedBy:    util.ExtractUserID(c),
+		TaskID:          uint(taskID),
+		Title:           input.Title,
+		Description:     input.Description,
+		ScopeType:       input.ScopeType,
+		ScopeID:         input.ScopeID,
+		Frequency:       frequency,
+		PlannedValue:    input.PlannedValue,
+		PlannedDate:     *plannedDate,
+		Notes:           input.Notes,
+		AssignedTo:      input.AssignedTo,
+		AggregationType: aggType,
+		Status:          "PENDING",
+		CreatedBy:       util.ExtractUserID(c),
 	}
 
 	milestoneDao := dao.MilestoneDao{}
@@ -166,18 +172,19 @@ func (MilestoneController) Single(c *gin.Context) {
 }
 
 type MilestoneUpdateInput struct {
-	AchievedValue *float64 `json:"achieved_value"`
-	AchievedDate  *string  `json:"achieved_date"`
-	Status        *string  `json:"status"`
-	Notes         *string  `json:"notes"`
-	Title         *string  `json:"title"`
-	Description   *string  `json:"description"`
-	ScopeType     *string  `json:"scope_type"`
-	ScopeID       *uint    `json:"scope_id"`
-	Frequency     *string  `json:"frequency"`
-	PlannedValue  *float64 `json:"planned_value"`
-	PlannedDate   *string  `json:"planned_date"`
-	AssignedTo    *uint    `json:"assigned_to"`
+	AchievedValue   *float64 `json:"achieved_value"`
+	AchievedDate    *string  `json:"achieved_date"`
+	Status          *string  `json:"status"`
+	Notes           *string  `json:"notes"`
+	Title           *string  `json:"title"`
+	Description     *string  `json:"description"`
+	ScopeType       *string  `json:"scope_type"`
+	ScopeID         *uint    `json:"scope_id"`
+	Frequency       *string  `json:"frequency"`
+	PlannedValue    *float64 `json:"planned_value"`
+	PlannedDate     *string  `json:"planned_date"`
+	AssignedTo      *uint    `json:"assigned_to"`
+	AggregationType *string  `json:"aggregation_type"`
 }
 
 func (MilestoneController) Update(c *gin.Context) {
@@ -252,6 +259,10 @@ func (MilestoneController) Update(c *gin.Context) {
 		}
 		milestone.AssignedTo = input.AssignedTo
 	}
+	oldAggType := milestone.AggregationType
+	if input.AggregationType != nil && *input.AggregationType != "" {
+		milestone.AggregationType = *input.AggregationType
+	}
 
 	userID := util.ExtractUserID(c)
 	milestone.UpdatedBy = &userID
@@ -261,8 +272,15 @@ func (MilestoneController) Update(c *gin.Context) {
 		return
 	}
 
-	// Recalculate parent task current_value
-	taskDao.RecalcCurrentValue(milestone.TaskID)
+	// If milestone aggregation_type changed, recalc achieved_value from progress entries
+	if oldAggType != milestone.AggregationType && milestone.AggregationType != "MANUAL" {
+		milestoneDao.RecalcAchievedValue(milestone.ID)
+	}
+
+	// Recalculate parent task current_value (skip if MANUAL)
+	if task.AggregationType != "MANUAL" {
+		taskDao.RecalcCurrentValue(milestone.TaskID)
+	}
 
 	// Refresh performance cache: task owner + project-level
 	perfDao := dao.PerformanceDao{}
@@ -385,8 +403,10 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 		return
 	}
 
-	// Accumulate achieved_value
-	ms.AchievedValue += input.IncrementValue
+	// Recalculate achieved_value based on milestone aggregation type
+	milestoneDao.RecalcAchievedValue(uint(id))
+	// Re-fetch to get the new achieved_value
+	ms, _ = milestoneDao.GetByID(uint(id))
 	ms.UpdatedBy = &userID
 
 	// Detect reduction goal from parent task (target < start)
@@ -413,8 +433,10 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 		return
 	}
 
-	// Recalculate parent task current_value (sum of all milestone achieved_values)
-	taskDao.RecalcCurrentValue(ms.TaskID)
+	// Recalculate parent task current_value (skip if MANUAL)
+	if parentTask.AggregationType != "MANUAL" {
+		taskDao.RecalcCurrentValue(ms.TaskID)
+	}
 
 	// Refresh performance cache asynchronously
 	perfDao := dao.PerformanceDao{}
@@ -441,4 +463,51 @@ func (MilestoneController) ListProgress(c *gin.Context) {
 		Find(&events)
 
 	c.JSON(http.StatusOK, gin.H{"events": events, "total": len(events)})
+}
+
+// UpdateProgress edits an existing progress entry and recalculates the milestone.
+func (MilestoneController) UpdateProgress(c *gin.Context) {
+	progressID, _ := strconv.Atoi(c.Param("progress_id"))
+
+	var input struct {
+		IncrementValue *float64 `json:"increment_value"`
+		Notes          *string  `json:"notes"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
+
+	// Find the progress entry
+	var progress model.MilestoneProgress
+	if err := dao.Database.Where("id = ?", progressID).First(&progress).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+		return
+	}
+
+	// Update fields
+	if input.IncrementValue != nil {
+		progress.IncrementValue = *input.IncrementValue
+	}
+	if input.Notes != nil {
+		progress.Notes = *input.Notes
+	}
+	dao.Database.Save(&progress)
+
+	// Recalculate milestone achieved_value
+	milestoneDao := dao.MilestoneDao{}
+	milestoneDao.RecalcAchievedValue(progress.MilestoneID)
+
+	// Recalculate parent task
+	ms, _ := milestoneDao.GetByID(progress.MilestoneID)
+	taskDao := dao.TaskDao{}
+	if ms.Task != nil && ms.Task.AggregationType != "MANUAL" {
+		taskDao.RecalcCurrentValue(ms.TaskID)
+	}
+
+	// Refresh performance cache
+	perfDao := dao.PerformanceDao{}
+	go perfDao.RefreshForTask(ms.TaskID)
+
+	c.JSON(http.StatusOK, gin.H{"progress": progress, "new_achieved": ms.AchievedValue})
 }

@@ -46,10 +46,8 @@ func (DashboardController) Performance(c *gin.Context) {
 func (DashboardController) DrillDown(c *gin.Context) {
 	level := c.Query("level")
 	idStr := c.DefaultQuery("id", "0")
-	periodStr := c.DefaultQuery("period", time.Now().Format("2006-01"))
 
 	id, _ := strconv.Atoi(idStr)
-	period, _ := time.Parse("2006-01", periodStr)
 
 	perfDao := dao.PerformanceDao{}
 
@@ -67,28 +65,16 @@ func (DashboardController) DrillDown(c *gin.Context) {
 
 	switch level {
 	case "ALL_DIRECOES":
-		// CA view: all direcções with their cached performance scores
+		// CA view: all direcções with scores computed from their projects (pilares)
 		direcaoDao := dao.DirecaoDao{}
 		direcoes, _, _ := direcaoDao.List(0, 200)
-		var ids []uint
-		for _, d := range direcoes {
-			ids = append(ids, d.ID)
-		}
-		scores, _ := perfDao.GetScores("DIRECAO", ids, period)
-		scoreMap := make(map[uint]dao.PerformanceCacheAlias)
-		for _, s := range scores {
-			scoreMap[s.EntityID] = s
-		}
 		for _, d := range direcoes {
 			item := DrillItem{ID: d.ID, Name: d.Name, Type: "DIRECAO"}
-			if s, ok := scoreMap[d.ID]; ok {
-				item.ExecutionScore = s.ExecutionScore
-				item.GoalScore = s.GoalScore
-				item.TotalScore = s.TotalScore
-				item.TrafficLight = s.TrafficLight
-			} else {
-				item.TrafficLight = "RED"
-			}
+			exec, goal, total, tl := perfDao.ComputeScoreForDirecaoFromProjects(d.ID)
+			item.ExecutionScore = exec
+			item.GoalScore = goal
+			item.TotalScore = total
+			item.TrafficLight = tl
 			items = append(items, item)
 		}
 
@@ -115,47 +101,84 @@ func (DashboardController) DrillDown(c *gin.Context) {
 	case "PELOURO":
 		direcaoDao := dao.DirecaoDao{}
 		direcoes, _ := direcaoDao.ListByPelouro(uint(id))
-		var ids []uint
-		for _, d := range direcoes {
-			ids = append(ids, d.ID)
-		}
-		scores, _ := perfDao.GetScores("DIRECAO", ids, period)
-		scoreMap := make(map[uint]dao.PerformanceCacheAlias)
-		for _, s := range scores {
-			scoreMap[s.EntityID] = dao.PerformanceCacheAlias(s)
-		}
 		for _, d := range direcoes {
 			item := DrillItem{ID: d.ID, Name: d.Name, Type: "DIRECAO"}
-			if s, ok := scoreMap[d.ID]; ok {
-				item.ExecutionScore = s.ExecutionScore
-				item.GoalScore = s.GoalScore
-				item.TotalScore = s.TotalScore
-				item.TrafficLight = s.TrafficLight
-			}
+			exec, goal, total, tl := perfDao.ComputeScoreForOwner("DIRECAO", d.ID)
+			item.ExecutionScore = exec
+			item.GoalScore = goal
+			item.TotalScore = total
+			item.TrafficLight = tl
 			items = append(items, item)
 		}
 
 	case "DIRECAO":
 		deptDao := dao.DepartamentoDao{}
 		depts, _ := deptDao.ListByDirecao(uint(id))
-		var ids []uint
-		for _, d := range depts {
-			ids = append(ids, d.ID)
-		}
-		scores, _ := perfDao.GetScores("DEPARTAMENTO", ids, period)
-		scoreMap := make(map[uint]dao.PerformanceCacheAlias)
-		for _, s := range scores {
-			scoreMap[s.EntityID] = dao.PerformanceCacheAlias(s)
-		}
 		for _, d := range depts {
 			item := DrillItem{ID: d.ID, Name: d.Name, Type: "DEPARTAMENTO"}
-			if s, ok := scoreMap[d.ID]; ok {
-				item.ExecutionScore = s.ExecutionScore
-				item.GoalScore = s.GoalScore
-				item.TotalScore = s.TotalScore
-				item.TrafficLight = s.TrafficLight
-			}
+			exec, goal, total, tl := perfDao.ComputeScoreForOwner("DEPARTAMENTO", d.ID)
+			item.ExecutionScore = exec
+			item.GoalScore = goal
+			item.TotalScore = total
+			item.TrafficLight = tl
 			items = append(items, item)
+		}
+
+	case "ASC":
+		// ASC is a leaf geographic level — return projects that have tasks scoped to this ASC.
+		taskDao := dao.TaskDao{}
+		milestoneDao := dao.MilestoneDao{}
+		tasks, _ := taskDao.GetByScopeEntity("ASC", uint(id))
+
+		// Group tasks by project to show project-level items with aggregated scores
+		projectTasks := make(map[uint][]model.Task)
+		for _, t := range tasks {
+			projectTasks[t.ProjectID] = append(projectTasks[t.ProjectID], t)
+		}
+
+		for projID, projTasks := range projectTasks {
+			var sumExec, sumGoal, totalWeight float64
+			for _, t := range projTasks {
+				milestones, _ := milestoneDao.GetNonBlockedByTask(t.ID)
+				var planned, achieved float64
+				for _, m := range milestones {
+					planned += m.PlannedValue
+					achieved += m.AchievedValue
+				}
+				exec := util.ComputeExecutionScore(planned, achieved)
+				startVal := float64(0)
+				if t.StartValue != nil {
+					startVal = *t.StartValue
+				}
+				goal := util.ComputeGoalScore(startVal, t.TargetValue, t.CurrentValue)
+				w := t.Weight
+				if w <= 0 {
+					w = 100
+				}
+				sumExec += exec * w
+				sumGoal += goal * w
+				totalWeight += w
+			}
+
+			var execS, goalS float64
+			if totalWeight > 0 {
+				execS = sumExec / totalWeight
+				goalS = sumGoal / totalWeight
+			}
+			totalS := util.ComputePerformanceScore(execS, goalS)
+
+			var proj model.Project
+			dao.Database.First(&proj, projID)
+
+			items = append(items, DrillItem{
+				ID:             projID,
+				Name:           proj.Title,
+				Type:           "PROJECT",
+				ExecutionScore: execS,
+				GoalScore:      goalS,
+				TotalScore:     totalS,
+				TrafficLight:   util.GetTrafficLight(totalS),
+			})
 		}
 	}
 
@@ -1840,4 +1863,107 @@ func (DashboardController) RegionalOverview(c *gin.Context) {
 			"blocked":          msBlocked,
 		},
 	})
+}
+
+// DirecaoMilestones returns all milestones for a given direcao with their
+// progress events, used for the CA dashboard indicator drill-down.
+func (DashboardController) DirecaoMilestones(c *gin.Context) {
+	direcaoID, _ := strconv.Atoi(c.Query("direcao_id"))
+	if direcaoID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "direcao_id required"})
+		return
+	}
+
+	projectDao := dao.ProjectDao{}
+	projects, err := projectDao.ListByDirecao(uint(direcaoID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+
+	taskDao := dao.TaskDao{}
+
+	type ProgressEntry struct {
+		ID              uint    `json:"id"`
+		IncrementValue  float64 `json:"increment_value"`
+		PeriodReference string  `json:"period_reference,omitempty"`
+		Notes           string  `json:"notes,omitempty"`
+		CreatedAt       string  `json:"created_at"`
+	}
+
+	type MilestoneItem struct {
+		ID              uint            `json:"id"`
+		Title           string          `json:"title"`
+		TaskID          uint            `json:"task_id"`
+		TaskTitle       string          `json:"task_title"`
+		ProjectID       uint            `json:"project_id"`
+		ProjectTitle    string          `json:"project_title"`
+		Status          string          `json:"status"`
+		PlannedValue    float64         `json:"planned_value"`
+		AchievedValue   float64         `json:"achieved_value"`
+		PlannedDate     string          `json:"planned_date"`
+		Frequency       string          `json:"frequency"`
+		AggregationType string          `json:"aggregation_type"`
+		AssigneeName    string          `json:"assignee_name,omitempty"`
+		TrafficLight    string          `json:"traffic_light"`
+		Progress        []ProgressEntry `json:"progress"`
+	}
+
+	var items []MilestoneItem
+
+	for _, p := range projects {
+		tasks, _ := taskDao.GetByProjectWithMilestones(p.ID)
+		for _, t := range tasks {
+			for _, ms := range t.Milestones {
+				tl := "RED"
+				if ms.PlannedValue > 0 {
+					pct := (ms.AchievedValue / ms.PlannedValue) * 100
+					tl = util.GetTrafficLight(pct)
+				}
+
+				item := MilestoneItem{
+					ID:              ms.ID,
+					Title:           ms.Title,
+					TaskID:          t.ID,
+					TaskTitle:       t.Title,
+					ProjectID:       p.ID,
+					ProjectTitle:    p.Title,
+					Status:          ms.Status,
+					PlannedValue:    ms.PlannedValue,
+					AchievedValue:   ms.AchievedValue,
+					PlannedDate:     ms.PlannedDate.Format("2006-01-02"),
+					Frequency:       ms.Frequency,
+					AggregationType: ms.AggregationType,
+					TrafficLight:    tl,
+				}
+
+				// Fetch progress events
+				var events []model.MilestoneProgress
+				dao.Database.Where("milestone_id = ?", ms.ID).Order("period_reference ASC, created_at ASC").Find(&events)
+
+				for _, e := range events {
+					pe := ProgressEntry{
+						ID:             e.ID,
+						IncrementValue: e.IncrementValue,
+						PeriodReference: e.PeriodReference,
+						Notes:          e.Notes,
+						CreatedAt:      e.CreatedAt.Format(time.RFC3339),
+					}
+					item.Progress = append(item.Progress, pe)
+				}
+
+				// Assignee name
+				if ms.AssignedTo != nil && *ms.AssignedTo > 0 {
+					var u model.User
+					if dao.Database.Select("name").Where("id = ?", *ms.AssignedTo).First(&u).Error == nil {
+						item.AssigneeName = u.Name
+					}
+				}
+
+				items = append(items, item)
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"milestones": items, "total": len(items)})
 }

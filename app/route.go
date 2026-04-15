@@ -84,6 +84,13 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	projectSvc.Tree(r, "")
 	projectSvc.UpdateProgress(r, "")
 
+	// Project History
+	projectHistorySvc := service.ProjectHistoryService{Route: "projects", Controller: controller.ProjectHistoryController{}}
+	projectHistorySvc.Create(r, "")
+	projectHistorySvc.List(r, "")
+	projectHistorySvc.Update(r, "")
+	projectHistorySvc.Delete(r, "")
+
 	// Tasks
 	taskSvc := service.TaskService{Route: "tasks", Controller: controller.TaskController{}}
 	taskSvc.ListByProject(r, "")
@@ -102,6 +109,7 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	milestoneSvc.UploadPhoto(r, "")
 	milestoneSvc.AddProgress(r, "")
 	milestoneSvc.ListProgress(r, "")
+	milestoneSvc.UpdateProgress(r, "")
 
 	// Blockers
 	blockerSvc := service.BlockerService{Route: "blockers", Controller: controller.BlockerController{}}
@@ -128,6 +136,18 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	dashSvc.DepartamentoOverview(r, "departamento-overview")
 	dashSvc.MemberOverview(r, "member-overview")
 	dashSvc.RegionalOverview(r, "regional-overview")
+	dashSvc.DirecaoMilestones(r, "direcao-milestones")
+
+	// Feedback
+	feedbackSvc := service.FeedbackService{Route: "feedback", Controller: controller.FeedbackController{}}
+	feedbackSvc.Create(r, "")
+	feedbackSvc.Reply(r, "")
+	feedbackSvc.ListReceived(r, "")
+	feedbackSvc.ListSent(r, "")
+	feedbackSvc.ListByTarget(r, "")
+	feedbackSvc.UnreadCount(r, "")
+	feedbackSvc.MarkAsRead(r, "")
+	feedbackSvc.Delete(r, "")
 
 	// Notifications
 	notifSvc := service.NotificationService{Route: "notifications", Controller: controller.NotificationController{}}

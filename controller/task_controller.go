@@ -24,7 +24,123 @@ func (TaskController) ListByProject(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
 	}
-	c.JSON(http.StatusOK, util.NewPaginatedResponse(list, total, params))
+	enriched := attachTaskPerf(list)
+	c.JSON(http.StatusOK, util.NewPaginatedResponse(enriched, total, params))
+}
+
+// attachTaskPerf computes live execution/goal/total scores for each task
+// from its milestones and injects a "performance" field into the JSON output.
+func attachTaskPerf(tasks []model.Task) []gin.H {
+	out := make([]gin.H, len(tasks))
+	for i, t := range tasks {
+		m := taskToMap(t)
+
+		// Filter non-blocked milestones
+		var nonBlocked []model.Milestone
+		for _, ms := range t.Milestones {
+			if ms.Status != "BLOCKED" {
+				nonBlocked = append(nonBlocked, ms)
+			}
+		}
+
+		var execScore, goalScore float64
+
+		if len(nonBlocked) > 0 {
+			var planned, achieved float64
+			switch t.AggregationType {
+			case "AVG":
+				for _, ms := range nonBlocked {
+					planned += ms.PlannedValue
+					achieved += ms.AchievedValue
+				}
+				n := float64(len(nonBlocked))
+				planned /= n
+				achieved /= n
+			case "LAST":
+				latest := nonBlocked[0]
+				for _, ms := range nonBlocked[1:] {
+					if ms.PlannedDate.After(latest.PlannedDate) {
+						latest = ms
+					} else if ms.PlannedDate.Equal(latest.PlannedDate) && ms.UpdatedAt.After(latest.UpdatedAt) {
+						latest = ms
+					}
+				}
+				planned = latest.PlannedValue
+				achieved = latest.AchievedValue
+			default: // SUM_UP, SUM_DOWN, MANUAL
+				for _, ms := range nonBlocked {
+					planned += ms.PlannedValue
+					achieved += ms.AchievedValue
+				}
+			}
+
+			startVal := float64(0)
+			if t.StartValue != nil {
+				startVal = *t.StartValue
+			}
+			if t.TargetValue < startVal {
+				execScore = util.ComputeExecutionScoreReduction(planned, achieved)
+			} else {
+				execScore = util.ComputeExecutionScore(planned, achieved)
+			}
+		}
+
+		// Goal score from the task's own KPI fields
+		startVal := float64(0)
+		if t.StartValue != nil {
+			startVal = *t.StartValue
+		}
+		goalScore = util.ComputeGoalScore(startVal, t.TargetValue, t.CurrentValue)
+
+		totalScore := util.ComputePerformanceScore(execScore, goalScore)
+
+		m["performance"] = gin.H{
+			"execution_score": execScore,
+			"goal_score":      goalScore,
+			"total_score":     totalScore,
+			"traffic_light":   util.GetTrafficLight(totalScore),
+		}
+		out[i] = m
+	}
+	return out
+}
+
+// taskToMap converts a model.Task to gin.H preserving JSON fields.
+func taskToMap(t model.Task) gin.H {
+	m := gin.H{
+		"id":               t.ID,
+		"created_at":       t.CreatedAt,
+		"updated_at":       t.UpdatedAt,
+		"project_id":       t.ProjectID,
+		"parent_task_id":   t.ParentTaskID,
+		"title":            t.Title,
+		"description":      t.Description,
+		"owner_type":       t.OwnerType,
+		"owner_id":         t.OwnerID,
+		"frequency":        t.Frequency,
+		"goal_label":       t.GoalLabel,
+		"start_value":      t.StartValue,
+		"target_value":     t.TargetValue,
+		"current_value":    t.CurrentValue,
+		"aggregation_type": t.AggregationType,
+		"weight":           t.Weight,
+		"start_date":       t.StartDate,
+		"end_date":         t.EndDate,
+		"next_update_due":  t.NextUpdateDue,
+		"status":           t.Status,
+		"created_by":       t.CreatedBy,
+		"assigned_to":      t.AssignedTo,
+	}
+	if t.Creator != nil {
+		m["creator"] = t.Creator
+	}
+	if t.Assignee != nil {
+		m["assignee"] = t.Assignee
+	}
+	if len(t.Scopes) > 0 {
+		m["scopes"] = t.Scopes
+	}
+	return m
 }
 
 type TaskInput struct {
@@ -37,7 +153,8 @@ type TaskInput struct {
 	GoalLabel       string       `json:"goal_label"`
 	StartValue      *float64     `json:"start_value"`
 	TargetValue     float64      `json:"target_value" binding:"required"`
-	AggregationType string       `json:"aggregation_type"` // SUM_UP (default), SUM_DOWN, AVG
+	AggregationType string       `json:"aggregation_type"` // SUM_UP, SUM_DOWN, AVG, LAST, MANUAL
+	CurrentValue    *float64     `json:"current_value"`    // only used when aggregation_type = MANUAL
 	Weight          float64      `json:"weight"`
 	StartDate       *string      `json:"start_date"`
 	EndDate         *string      `json:"end_date"`
@@ -218,15 +335,24 @@ func (TaskController) Update(c *gin.Context) {
 		return
 	}
 
-	// Recalculate current_value if aggregation type or start_value changed
-	startChanged := (task.StartValue == nil) != (oldData.StartValue == nil) ||
-		(task.StartValue != nil && oldData.StartValue != nil && *task.StartValue != *oldData.StartValue)
-	if task.AggregationType != oldData.AggregationType || startChanged {
-		taskDao.RecalcCurrentValue(task.ID)
-		// Also refresh performance cache
+	// Handle current_value: MANUAL override or auto-recalc
+	if task.AggregationType == "MANUAL" && input.CurrentValue != nil {
+		// Direct override for MANUAL aggregation
+		task.CurrentValue = *input.CurrentValue
+		taskDao.Update(&task)
 		perfDao := dao.PerformanceDao{}
 		go perfDao.RefreshForTask(task.ID)
 		go perfDao.RefreshForProject(task.ProjectID)
+	} else if task.AggregationType != "MANUAL" {
+		// Auto-recalculate if aggregation type or start_value changed
+		startChanged := (task.StartValue == nil) != (oldData.StartValue == nil) ||
+			(task.StartValue != nil && oldData.StartValue != nil && *task.StartValue != *oldData.StartValue)
+		if task.AggregationType != oldData.AggregationType || startChanged {
+			taskDao.RecalcCurrentValue(task.ID)
+			perfDao := dao.PerformanceDao{}
+			go perfDao.RefreshForTask(task.ID)
+			go perfDao.RefreshForProject(task.ProjectID)
+		}
 	}
 
 	// Update scopes

@@ -44,4 +44,8 @@ func RunMigrations() {
 	Database.Exec("ALTER TABLE performance_caches ALTER COLUMN execution_score TYPE decimal(10,2);")
 	Database.Exec("ALTER TABLE performance_caches ALTER COLUMN goal_score TYPE decimal(10,2);")
 	Database.Exec("ALTER TABLE performance_caches ALTER COLUMN total_score TYPE decimal(10,2);")
+
+	// Ensure milestones.aggregation_type defaults to SUM_UP and backfill NULLs
+	Database.Exec("ALTER TABLE milestones ALTER COLUMN aggregation_type SET DEFAULT 'SUM_UP';")
+	Database.Exec("UPDATE milestones SET aggregation_type = 'SUM_UP' WHERE aggregation_type IS NULL OR aggregation_type = '';")
 }

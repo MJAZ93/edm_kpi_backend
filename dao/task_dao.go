@@ -40,7 +40,7 @@ func (d *TaskDao) ListByProjectScoped(projectID uint, page, limit int, scope *Us
 	q = scope.ApplyToTasks(q)
 	q.Count(&total)
 
-	q2 := Database.Preload("Creator").Preload("Assignee").Preload("Scopes").Where("project_id = ?", projectID)
+	q2 := Database.Preload("Creator").Preload("Assignee").Preload("Scopes").Preload("Milestones").Where("project_id = ?", projectID)
 	q2 = scope.ApplyToTasks(q2)
 	if limit > 0 && page >= 0 {
 		q2 = q2.Offset(page * limit).Limit(limit)

@@ -44,6 +44,8 @@ func LoadDatabase() error {
 		&model.AuditLog{},
 		&model.Notification{},
 		&model.PerformanceCache{},
+		&model.ProjectHistory{},
+		&model.Feedback{},
 	}
 
 	for _, m := range models {

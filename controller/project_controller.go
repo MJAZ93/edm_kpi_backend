@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"kpi-backend/dao"
 	"kpi-backend/model"
@@ -42,27 +44,69 @@ func attachProjectPerf(projects []model.Project) []gin.H {
 		}
 
 		// Execution score from the project's tasks' milestones
-		var totalPlanned, totalAchieved float64
+		// Weighted average of per-task execution scores (matching taskExecScore logic)
+		var sumExec, totalWeight float64
 		for _, t := range p.Tasks {
-			var taskPlanned, taskAchieved float64
-			var count float64
+			var nonBlocked []model.Milestone
 			for _, ms := range t.Milestones {
 				if ms.Status != "BLOCKED" {
-					taskPlanned += ms.PlannedValue
-					taskAchieved += ms.AchievedValue
-					count++
+					nonBlocked = append(nonBlocked, ms)
 				}
 			}
-			// For AVG tasks, use the average of milestones (not the sum)
-			if t.AggregationType == "AVG" && count > 0 {
-				totalPlanned += taskPlanned / count
-				totalAchieved += taskAchieved / count
-			} else {
-				totalPlanned += taskPlanned
-				totalAchieved += taskAchieved
+			if len(nonBlocked) == 0 {
+				continue
 			}
+
+			var taskPlanned, taskAchieved float64
+			switch t.AggregationType {
+			case "AVG":
+				for _, ms := range nonBlocked {
+					taskPlanned += ms.PlannedValue
+					taskAchieved += ms.AchievedValue
+				}
+				n := float64(len(nonBlocked))
+				taskPlanned = taskPlanned / n
+				taskAchieved = taskAchieved / n
+			case "LAST":
+				latest := nonBlocked[0]
+				for _, ms := range nonBlocked[1:] {
+					if ms.PlannedDate.After(latest.PlannedDate) {
+						latest = ms
+					} else if ms.PlannedDate.Equal(latest.PlannedDate) && ms.UpdatedAt.After(latest.UpdatedAt) {
+						latest = ms
+					}
+				}
+				taskPlanned = latest.PlannedValue
+				taskAchieved = latest.AchievedValue
+			default: // SUM_UP, SUM_DOWN, MANUAL
+				for _, ms := range nonBlocked {
+					taskPlanned += ms.PlannedValue
+					taskAchieved += ms.AchievedValue
+				}
+			}
+
+			// Detect reduction goal
+			var taskExec float64
+			taskStartVal := float64(0)
+			if t.StartValue != nil {
+				taskStartVal = *t.StartValue
+			}
+			if t.TargetValue < taskStartVal {
+				taskExec = util.ComputeExecutionScoreReduction(taskPlanned, taskAchieved)
+			} else {
+				taskExec = util.ComputeExecutionScore(taskPlanned, taskAchieved)
+			}
+
+			w := t.Weight
+			if w <= 0 {
+				w = 100
+			}
+			sumExec += taskExec * w
+			totalWeight += w
 		}
-		execScore = util.ComputeExecutionScore(totalPlanned, totalAchieved)
+		if totalWeight > 0 {
+			execScore = sumExec / totalWeight
+		}
 
 		totalScore := util.ComputePerformanceScore(execScore, goalScore)
 
@@ -355,7 +399,8 @@ func (ProjectController) UpdateProgress(c *gin.Context) {
 	}
 
 	var input struct {
-		CurrentValue float64 `json:"current_value" binding:"required"`
+		CurrentValue    float64 `json:"current_value" binding:"required"`
+		PeriodReference string  `json:"period_reference"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
@@ -369,6 +414,20 @@ func (ProjectController) UpdateProgress(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
 	}
+
+	// Auto-create a history entry so the dashboard chart tracks real value evolution
+	periodRef := input.PeriodReference
+	if periodRef == "" {
+		now := time.Now()
+		periodRef = fmt.Sprintf("%d-%02d", now.Year(), now.Month())
+	}
+	historyDao := dao.ProjectHistoryDao{}
+	_ = historyDao.Create(&model.ProjectHistory{
+		ProjectID:       project.ID,
+		Value:           cv,
+		PeriodReference: periodRef,
+		CreatedBy:       util.ExtractUserID(c),
+	})
 
 	project, _ = projectDao.GetByID(project.ID)
 

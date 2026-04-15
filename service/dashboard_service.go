@@ -70,3 +70,7 @@ func (s DashboardService) MemberOverview(r *gin.RouterGroup, route string) {
 func (s DashboardService) RegionalOverview(r *gin.RouterGroup, route string) {
 	r.GET("/"+s.Route+"/"+route, s.Controller.RegionalOverview)
 }
+
+func (s DashboardService) DirecaoMilestones(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route, s.Controller.DirecaoMilestones)
+}

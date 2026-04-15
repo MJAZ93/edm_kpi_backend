@@ -62,3 +62,67 @@ func (d *MilestoneDao) CountByTask(taskID uint) (total, done, blocked int64) {
 	Database.Model(&model.Milestone{}).Where("task_id = ? AND status = 'BLOCKED' AND deleted_at IS NULL", taskID).Count(&blocked)
 	return
 }
+
+// RecalcAchievedValue recalculates a milestone's achieved_value from its progress entries
+// based on the milestone's aggregation_type. If the milestone has no aggregation_type set,
+// it inherits from the parent task's aggregation_type.
+func (d *MilestoneDao) RecalcAchievedValue(milestoneID uint) error {
+	var ms model.Milestone
+	if err := Database.Select("aggregation_type", "task_id").Where("id = ?", milestoneID).First(&ms).Error; err != nil {
+		return err
+	}
+
+	aggType := ms.AggregationType
+	if aggType == "" {
+		// Inherit from parent task
+		var task model.Task
+		if err := Database.Select("aggregation_type").Where("id = ?", ms.TaskID).First(&task).Error; err == nil && task.AggregationType != "" {
+			aggType = task.AggregationType
+		} else {
+			aggType = "SUM_UP"
+		}
+	}
+
+	switch aggType {
+	case "AVG":
+		return Database.Exec(`
+			UPDATE milestones SET achieved_value = (
+				SELECT COALESCE(AVG(increment_value), 0)
+				FROM milestone_progresses
+				WHERE milestone_id = ? AND deleted_at IS NULL
+			), updated_at = NOW()
+			WHERE id = ?
+		`, milestoneID, milestoneID).Error
+
+	case "LAST":
+		return Database.Exec(`
+			UPDATE milestones SET achieved_value = COALESCE((
+				SELECT increment_value
+				FROM milestone_progresses
+				WHERE milestone_id = ? AND deleted_at IS NULL
+				ORDER BY updated_at DESC
+				LIMIT 1
+			), 0), updated_at = NOW()
+			WHERE id = ?
+		`, milestoneID, milestoneID).Error
+
+	default: // SUM_UP
+		return Database.Exec(`
+			UPDATE milestones SET achieved_value = (
+				SELECT COALESCE(SUM(increment_value), 0)
+				FROM milestone_progresses
+				WHERE milestone_id = ? AND deleted_at IS NULL
+			), updated_at = NOW()
+			WHERE id = ?
+		`, milestoneID, milestoneID).Error
+	}
+}
+
+// UpdateProgress updates a single progress entry's increment_value and notes.
+func (d *MilestoneDao) UpdateProgress(progressID uint, incrementValue float64, notes string) error {
+	return Database.Model(&model.MilestoneProgress{}).Where("id = ?", progressID).
+		Updates(map[string]interface{}{
+			"increment_value": incrementValue,
+			"notes":           notes,
+		}).Error
+}
