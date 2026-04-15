@@ -832,9 +832,10 @@ func resolveEntityName(entityType string, id uint) string {
 //	{
 //	  direction:        { id, name, execution_score, goal_score, total_score, traffic_light }
 //	  projects:         [ { id, title, status, execution_score, goal_score, total_score, traffic_light } ]
-//	  stalled_tasks:    [ { id, title, project_title, days_elapsed, progress_pct } ]
+//	  stalled_tasks:    [ { id, title, project_title, dept_name, days_elapsed, progress_pct } ]
 //	  pending_blockers: [ { id, entity_type, entity_title, blocker_type, description, created_at } ]
 //	  dept_scores:      [ { id, name, execution_score, goal_score, total_score, traffic_light } ]
+//	  overdue_milestones: [ { id, title, task_title, dept_name, assignee_name, planned_date, days_overdue, planned_value, achieved_value } ]
 //	}
 func (DashboardController) DirecaoOverview(c *gin.Context) {
 	userID := util.ExtractUserID(c)
@@ -852,11 +853,12 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		// No direction configured for this user: return empty overview so the
 		// frontend can show a helpful "not configured" message.
 		c.JSON(http.StatusOK, gin.H{
-			"direction":        nil,
-			"projects":         []interface{}{},
-			"stalled_tasks":    []interface{}{},
-			"pending_blockers": []interface{}{},
-			"dept_scores":      []interface{}{},
+			"direction":           nil,
+			"projects":            []interface{}{},
+			"stalled_tasks":       []interface{}{},
+			"pending_blockers":    []interface{}{},
+			"dept_scores":         []interface{}{},
+			"overdue_milestones":  []interface{}{},
 		})
 		return
 	}
@@ -864,7 +866,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 	perfDao := dao.PerformanceDao{}
 
 	// ── Direction live score ─────────────────────────────────────────────────
-	eDir, gDir, tDir, lDir := perfDao.ComputeScoreForOwner("DIRECAO", dir.ID)
+	eDir, gDir, tDir, lDir := perfDao.ComputeScoreForDirecaoFromProjects(dir.ID)
 
 	// ── Projects linked to this direction ────────────────────────────────────
 	projDao := dao.ProjectDao{}
@@ -887,6 +889,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		ID           uint    `json:"id"`
 		Title        string  `json:"title"`
 		ProjectTitle string  `json:"project_title"`
+		DeptName     string  `json:"dept_name"`
 		DaysElapsed  int     `json:"days_elapsed"`
 		ProgressPct  float64 `json:"progress_pct"`
 	}
@@ -895,6 +898,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		SELECT t.id,
 		       t.title,
 		       COALESCE(p.title, '') AS project_title,
+		       COALESCE(d.name, '') AS dept_name,
 		       GREATEST(0, EXTRACT(DAY FROM NOW() - t.start_date)::int) AS days_elapsed,
 		       CASE WHEN (t.target_value - t.start_value) = 0 THEN 0
 		            ELSE ROUND(((t.current_value - t.start_value) / (t.target_value - t.start_value)) * 100, 1)
@@ -1056,6 +1060,44 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		})
 	}
 
+	// ── Overdue milestones (past planned_date, not DONE) ─────────────────────
+	type OverdueMilestone struct {
+		ID          uint    `json:"id"`
+		Title       string  `json:"title"`
+		TaskTitle   string  `json:"task_title"`
+		DeptName    string  `json:"dept_name"`
+		AssigneeName string `json:"assignee_name"`
+		PlannedDate string  `json:"planned_date"`
+		DaysOverdue int     `json:"days_overdue"`
+		PlannedValue float64 `json:"planned_value"`
+		AchievedValue float64 `json:"achieved_value"`
+	}
+	var overdueMilestones []OverdueMilestone
+	dao.Database.Raw(`
+		SELECT m.id,
+		       m.title,
+		       COALESCE(t.title, '') AS task_title,
+		       COALESCE(dep.name, '') AS dept_name,
+		       COALESCE(u.name, '') AS assignee_name,
+		       m.planned_date::text AS planned_date,
+		       GREATEST(0, EXTRACT(DAY FROM NOW() - m.planned_date)::int) AS days_overdue,
+		       COALESCE(m.planned_value, 0) AS planned_value,
+		       COALESCE(m.achieved_value, 0) AS achieved_value
+		FROM milestones m
+		JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+		JOIN departamentos dep ON dep.id = t.owner_id AND t.owner_type = 'DEPARTAMENTO'
+		LEFT JOIN users u ON u.id = m.assigned_to AND u.deleted_at IS NULL
+		WHERE dep.direcao_id = ?
+		  AND m.deleted_at IS NULL
+		  AND m.status != 'DONE'
+		  AND m.planned_date < NOW()
+		ORDER BY days_overdue DESC
+		LIMIT 10
+	`, dir.ID).Scan(&overdueMilestones)
+	if overdueMilestones == nil {
+		overdueMilestones = []OverdueMilestone{}
+	}
+
 	// ── Director's personal score ────────────────────────────────────────────
 	myScore := perfDao.ScoreForUser(userID)
 
@@ -1076,11 +1118,12 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 			"ms_total":        myScore.MsTotal,
 			"ms_done":         myScore.MsDone,
 		},
-		"projects":         projItems,
-		"dir_tasks":        dirTaskItems,
-		"stalled_tasks":    stalledTasks,
-		"pending_blockers": blockerItems,
-		"dept_scores":      deptScores,
+		"projects":            projItems,
+		"dir_tasks":           dirTaskItems,
+		"stalled_tasks":       stalledTasks,
+		"pending_blockers":    blockerItems,
+		"dept_scores":         deptScores,
+		"overdue_milestones":  overdueMilestones,
 	})
 }
 

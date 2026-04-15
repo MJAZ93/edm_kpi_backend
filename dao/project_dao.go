@@ -138,6 +138,7 @@ func (d *ProjectDao) ListByDirecao(direcaoID uint) ([]model.Project, error) {
 
 	var list []model.Project
 	err := Database.Preload("Creator").Preload("Direcoes").
+		Preload("Tasks", "deleted_at IS NULL").Preload("Tasks.Milestones", "deleted_at IS NULL").
 		Where("id IN ? AND deleted_at IS NULL", ids).
 		Order("created_at DESC").Find(&list).Error
 	return list, err
