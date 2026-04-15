@@ -889,6 +889,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		ID           uint    `json:"id"`
 		Title        string  `json:"title"`
 		ProjectTitle string  `json:"project_title"`
+		DeptID       uint    `json:"dept_id"`
 		DeptName     string  `json:"dept_name"`
 		DaysElapsed  int     `json:"days_elapsed"`
 		ProgressPct  float64 `json:"progress_pct"`
@@ -898,6 +899,7 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 		SELECT t.id,
 		       t.title,
 		       COALESCE(p.title, '') AS project_title,
+		       d.id AS dept_id,
 		       COALESCE(d.name, '') AS dept_name,
 		       GREATEST(0, EXTRACT(DAY FROM NOW() - t.start_date)::int) AS days_elapsed,
 		       CASE WHEN (t.target_value - t.start_value) = 0 THEN 0
@@ -1062,21 +1064,25 @@ func (DashboardController) DirecaoOverview(c *gin.Context) {
 
 	// ── Overdue milestones (past planned_date, not DONE) ─────────────────────
 	type OverdueMilestone struct {
-		ID          uint    `json:"id"`
-		Title       string  `json:"title"`
-		TaskTitle   string  `json:"task_title"`
-		DeptName    string  `json:"dept_name"`
-		AssigneeName string `json:"assignee_name"`
-		PlannedDate string  `json:"planned_date"`
-		DaysOverdue int     `json:"days_overdue"`
-		PlannedValue float64 `json:"planned_value"`
+		ID            uint    `json:"id"`
+		Title         string  `json:"title"`
+		TaskID        uint    `json:"task_id"`
+		TaskTitle     string  `json:"task_title"`
+		DeptID        uint    `json:"dept_id"`
+		DeptName      string  `json:"dept_name"`
+		AssigneeName  string  `json:"assignee_name"`
+		PlannedDate   string  `json:"planned_date"`
+		DaysOverdue   int     `json:"days_overdue"`
+		PlannedValue  float64 `json:"planned_value"`
 		AchievedValue float64 `json:"achieved_value"`
 	}
 	var overdueMilestones []OverdueMilestone
 	dao.Database.Raw(`
 		SELECT m.id,
 		       m.title,
+		       t.id AS task_id,
 		       COALESCE(t.title, '') AS task_title,
+		       dep.id AS dept_id,
 		       COALESCE(dep.name, '') AS dept_name,
 		       COALESCE(u.name, '') AS assignee_name,
 		       m.planned_date::text AS planned_date,
@@ -2009,4 +2015,160 @@ func (DashboardController) DirecaoMilestones(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"milestones": items, "total": len(items)})
+}
+
+// DepartamentoDetail returns a detailed view of a department, accessible by
+// CA, PELOURO, DIRECAO, and DEPARTAMENTO roles. Unlike DepartamentoOverview
+// (which auto-resolves the requesting user's department), this endpoint takes
+// an explicit department ID in the URL path.
+func (DashboardController) DepartamentoDetail(c *gin.Context) {
+	role := util.ExtractRole(c)
+	if role != "CA" && role != "PELOURO" && role != "DIRECAO" && role != "DEPARTAMENTO" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	deptID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department id"})
+		return
+	}
+
+	deptDao := dao.DepartamentoDao{}
+	dept, err := deptDao.GetByID(uint(deptID))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "department not found"})
+		return
+	}
+
+	perfDao := dao.PerformanceDao{}
+	round1 := func(v float64) float64 { return math.Round(v*10) / 10 }
+
+	// ── Department scores ────────────────────────────────────────────────────
+	eDept, gDept, tDept, lDept := perfDao.ComputeScoreForOwner("DEPARTAMENTO", dept.ID)
+
+	// ── Tasks owned by this department ───────────────────────────────────────
+	type TaskItem struct {
+		ID           uint    `json:"id"`
+		Title        string  `json:"title"`
+		Status       string  `json:"status"`
+		ProjectTitle string  `json:"project_title"`
+		ProgressPct  float64 `json:"progress_pct"`
+		IsOverdue    bool    `json:"is_overdue"`
+		OverdueDays  int     `json:"overdue_days"`
+	}
+	var taskItems []TaskItem
+	dao.Database.Raw(`
+		SELECT t.id, t.title, t.status,
+		       COALESCE(p.title, '') AS project_title,
+		       CASE WHEN (t.target_value - COALESCE(t.start_value, 0)) = 0 THEN 0
+		            ELSE ROUND(((t.current_value - COALESCE(t.start_value, 0)) / (t.target_value - COALESCE(t.start_value, 0))) * 100, 1)
+		       END AS progress_pct,
+		       CASE WHEN t.end_date < NOW() AND t.status != 'DONE' THEN true ELSE false END AS is_overdue,
+		       GREATEST(0, EXTRACT(DAY FROM NOW() - t.end_date)::int) AS overdue_days
+		FROM tasks t
+		LEFT JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		WHERE t.owner_type = 'DEPARTAMENTO' AND t.owner_id = ?
+		  AND t.deleted_at IS NULL
+		ORDER BY t.created_at DESC
+	`, dept.ID).Scan(&taskItems)
+	if taskItems == nil {
+		taskItems = []TaskItem{}
+	}
+
+	// ── Overdue milestones ──────────────────────────────────────────────────
+	type OverdueMsItem struct {
+		ID            uint    `json:"id"`
+		Title         string  `json:"title"`
+		TaskID        uint    `json:"task_id"`
+		TaskTitle     string  `json:"task_title"`
+		AssigneeName  string  `json:"assignee_name"`
+		PlannedDate   string  `json:"planned_date"`
+		DaysOverdue   int     `json:"days_overdue"`
+		PlannedValue  float64 `json:"planned_value"`
+		AchievedValue float64 `json:"achieved_value"`
+	}
+	var overdueMs []OverdueMsItem
+	dao.Database.Raw(`
+		SELECT m.id, m.title,
+		       t.id AS task_id,
+		       COALESCE(t.title, '') AS task_title,
+		       COALESCE(u.name, '') AS assignee_name,
+		       m.planned_date::text AS planned_date,
+		       GREATEST(0, EXTRACT(DAY FROM NOW() - m.planned_date)::int) AS days_overdue,
+		       COALESCE(m.planned_value, 0) AS planned_value,
+		       COALESCE(m.achieved_value, 0) AS achieved_value
+		FROM milestones m
+		JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+		LEFT JOIN users u ON u.id = m.assigned_to AND u.deleted_at IS NULL
+		WHERE t.owner_type = 'DEPARTAMENTO' AND t.owner_id = ?
+		  AND m.deleted_at IS NULL
+		  AND m.status != 'DONE'
+		  AND m.planned_date < NOW()
+		ORDER BY days_overdue DESC LIMIT 15
+	`, dept.ID).Scan(&overdueMs)
+	if overdueMs == nil {
+		overdueMs = []OverdueMsItem{}
+	}
+
+	// ── Workers (members of this department) ────────────────────────────────
+	type WorkerItem struct {
+		ID             uint    `json:"id"`
+		Name           string  `json:"name"`
+		Email          string  `json:"email"`
+		Role           string  `json:"role"`
+		ExecScore      float64 `json:"execution_score"`
+		GoalScore      float64 `json:"goal_score"`
+		TotalScore     float64 `json:"total_score"`
+		TrafficLight   string  `json:"traffic_light"`
+		MsTotal        int     `json:"ms_total"`
+		MsDone         int     `json:"ms_done"`
+	}
+	users, _ := deptDao.GetUsers(dept.ID)
+	workers := make([]WorkerItem, 0, len(users))
+	for _, u := range users {
+		sc := perfDao.ScoreForUser(u.ID)
+		workers = append(workers, WorkerItem{
+			ID:           u.ID,
+			Name:         u.Name,
+			Email:        u.Email,
+			Role:         u.Role,
+			ExecScore:    round1(sc.ExecScore),
+			GoalScore:    round1(sc.GoalScore),
+			TotalScore:   round1(sc.TotalScore),
+			TrafficLight: sc.TrafficLight,
+			MsTotal:      sc.MsTotal,
+			MsDone:       sc.MsDone,
+		})
+	}
+
+	// ── Stats ────────────────────────────────────────────────────────────────
+	var totalTasks, activeTasks, doneTasks, overdueTasks int64
+	dao.Database.Model(&model.Task{}).Where("owner_type = 'DEPARTAMENTO' AND owner_id = ? AND deleted_at IS NULL", dept.ID).Count(&totalTasks)
+	dao.Database.Model(&model.Task{}).Where("owner_type = 'DEPARTAMENTO' AND owner_id = ? AND deleted_at IS NULL AND status = 'ACTIVE'", dept.ID).Count(&activeTasks)
+	dao.Database.Model(&model.Task{}).Where("owner_type = 'DEPARTAMENTO' AND owner_id = ? AND deleted_at IS NULL AND status = 'DONE'", dept.ID).Count(&doneTasks)
+	dao.Database.Model(&model.Task{}).Where("owner_type = 'DEPARTAMENTO' AND owner_id = ? AND deleted_at IS NULL AND end_date < NOW() AND status != 'DONE'", dept.ID).Count(&overdueTasks)
+
+	c.JSON(http.StatusOK, gin.H{
+		"department": gin.H{
+			"id":              dept.ID,
+			"name":            dept.Name,
+			"description":     dept.Description,
+			"direcao_id":      dept.DirecaoID,
+			"responsible":     dept.Responsible,
+			"execution_score": round1(eDept),
+			"goal_score":      round1(gDept),
+			"total_score":     round1(tDept),
+			"traffic_light":   lDept,
+		},
+		"tasks":              taskItems,
+		"overdue_milestones": overdueMs,
+		"workers":            workers,
+		"stats": gin.H{
+			"total":   totalTasks,
+			"active":  activeTasks,
+			"done":    doneTasks,
+			"overdue": overdueTasks,
+		},
+	})
 }

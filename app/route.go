@@ -137,6 +137,7 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	dashSvc.MemberOverview(r, "member-overview")
 	dashSvc.RegionalOverview(r, "regional-overview")
 	dashSvc.DirecaoMilestones(r, "direcao-milestones")
+	dashSvc.DepartamentoDetail(r, "departamento-detail")
 
 	// Feedback
 	feedbackSvc := service.FeedbackService{Route: "feedback", Controller: controller.FeedbackController{}}

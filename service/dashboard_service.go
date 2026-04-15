@@ -74,3 +74,7 @@ func (s DashboardService) RegionalOverview(r *gin.RouterGroup, route string) {
 func (s DashboardService) DirecaoMilestones(r *gin.RouterGroup, route string) {
 	r.GET("/"+s.Route+"/"+route, s.Controller.DirecaoMilestones)
 }
+
+func (s DashboardService) DepartamentoDetail(r *gin.RouterGroup, route string) {
+	r.GET("/"+s.Route+"/"+route+"/:id", s.Controller.DepartamentoDetail)
+}
