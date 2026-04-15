@@ -2172,3 +2172,163 @@ func (DashboardController) DepartamentoDetail(c *gin.Context) {
 		},
 	})
 }
+
+// UserDetail returns a read-only detail view for any user, accessible by
+// directors and above. Shows the user's tasks, milestones, scores, and stats.
+func (DashboardController) UserDetail(c *gin.Context) {
+	targetID, _ := strconv.Atoi(c.Param("id"))
+	if targetID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": "user id required"})
+		return
+	}
+
+	var targetUser model.User
+	if err := dao.Database.Where("id = ?", targetID).First(&targetUser).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "user not found"})
+		return
+	}
+
+	perfDao := dao.PerformanceDao{}
+	score := perfDao.ScoreForUser(uint(targetID))
+
+	// Department membership
+	type DeptInfo struct {
+		ID   uint   `json:"id"`
+		Name string `json:"name"`
+	}
+	var departments []DeptInfo
+	dao.Database.Raw(`
+		SELECT d.id, d.name
+		FROM departamentos d
+		JOIN departamento_users du ON du.departamento_id = d.id
+		WHERE du.user_id = ? AND d.deleted_at IS NULL
+		ORDER BY d.name
+	`, targetID).Scan(&departments)
+	if departments == nil {
+		departments = []DeptInfo{}
+	}
+
+	// Tasks assigned to this user
+	type TaskRow struct {
+		ID          uint    `json:"id"`
+		Title       string  `json:"title"`
+		Status      string  `json:"status"`
+		ProjectID   uint    `json:"project_id"`
+		ProjectName string  `json:"project_name"`
+		DeptName    string  `json:"dept_name"`
+		StartDate   *string `json:"start_date"`
+		EndDate     *string `json:"end_date"`
+	}
+	var tasks []TaskRow
+	dao.Database.Raw(`
+		SELECT t.id, t.title, t.status,
+		       t.project_id,
+		       COALESCE(p.title, '') AS project_name,
+		       COALESCE(dep.name, '') AS dept_name,
+		       COALESCE(TO_CHAR(t.start_date, 'YYYY-MM-DD'), '') AS start_date,
+		       COALESCE(TO_CHAR(t.end_date, 'YYYY-MM-DD'), '') AS end_date
+		FROM tasks t
+		LEFT JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		LEFT JOIN departamentos dep ON dep.id = t.owner_id AND t.owner_type = 'DEPARTAMENTO'
+		WHERE t.assigned_to = ? AND t.deleted_at IS NULL
+		ORDER BY t.created_at DESC
+	`, targetID).Scan(&tasks)
+	if tasks == nil {
+		tasks = []TaskRow{}
+	}
+
+	// Milestones assigned to this user
+	type MsRow struct {
+		ID            uint    `json:"id"`
+		Title         string  `json:"title"`
+		Status        string  `json:"status"`
+		PlannedDate   string  `json:"planned_date"`
+		PlannedValue  float64 `json:"planned_value"`
+		AchievedValue float64 `json:"achieved_value"`
+		TaskID        uint    `json:"task_id"`
+		TaskTitle     string  `json:"task_title"`
+		ProjectTitle  string  `json:"project_title"`
+		DaysOverdue   int     `json:"days_overdue"`
+	}
+	var milestones []MsRow
+	dao.Database.Raw(`
+		SELECT m.id, m.title, m.status,
+		       COALESCE(TO_CHAR(m.planned_date, 'YYYY-MM-DD'), '') AS planned_date,
+		       COALESCE(m.planned_value, 0)   AS planned_value,
+		       COALESCE(m.achieved_value, 0)  AS achieved_value,
+		       t.id AS task_id,
+		       COALESCE(t.title, '') AS task_title,
+		       COALESCE(p.title, '') AS project_title,
+		       CASE WHEN m.status != 'DONE' AND m.planned_date < NOW()
+		            THEN GREATEST(0, EXTRACT(DAY FROM NOW() - m.planned_date)::int)
+		            ELSE 0 END AS days_overdue
+		FROM milestones m
+		JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
+		LEFT JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		WHERE m.assigned_to = ? AND m.deleted_at IS NULL
+		ORDER BY m.planned_date ASC NULLS LAST
+	`, targetID).Scan(&milestones)
+	if milestones == nil {
+		milestones = []MsRow{}
+	}
+
+	// Stats
+	var msTotal, msDone, msOverdue int
+	for _, m := range milestones {
+		msTotal++
+		if m.Status == "DONE" {
+			msDone++
+		}
+		if m.DaysOverdue > 0 {
+			msOverdue++
+		}
+	}
+
+	// Monthly trend (last 6 months)
+	type MonthlyRow struct {
+		Month string `json:"month"`
+		Done  int    `json:"done"`
+		Total int    `json:"total"`
+	}
+	var monthly []MonthlyRow
+	dao.Database.Raw(`
+		SELECT TO_CHAR(DATE_TRUNC('month', m.planned_date), 'YYYY-MM') AS month,
+		       SUM(CASE WHEN m.status = 'DONE' THEN 1 ELSE 0 END)::int AS done,
+		       COUNT(*)::int AS total
+		FROM milestones m
+		WHERE m.assigned_to = ?
+		  AND m.deleted_at IS NULL
+		  AND m.planned_date >= NOW() - INTERVAL '6 months'
+		GROUP BY DATE_TRUNC('month', m.planned_date)
+		ORDER BY month ASC
+	`, targetID).Scan(&monthly)
+	if monthly == nil {
+		monthly = []MonthlyRow{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user": gin.H{
+			"id":    targetUser.ID,
+			"name":  targetUser.Name,
+			"email": targetUser.Email,
+			"role":  targetUser.Role,
+		},
+		"departments": departments,
+		"score": gin.H{
+			"execution_score": math.Round(score.ExecScore*10) / 10,
+			"goal_score":      math.Round(score.GoalScore*10) / 10,
+			"total_score":     math.Round(score.TotalScore*10) / 10,
+			"traffic_light":   score.TrafficLight,
+			"ms_total":        score.MsTotal,
+			"ms_done":         score.MsDone,
+		},
+		"tasks":       tasks,
+		"milestones":  milestones,
+		"stats": gin.H{
+			"total":   msTotal,
+			"done":    msDone,
+			"overdue": msOverdue,
+		},
+		"monthly": monthly,
+	})
+}

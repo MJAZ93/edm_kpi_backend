@@ -90,6 +90,7 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	projectHistorySvc.List(r, "")
 	projectHistorySvc.Update(r, "")
 	projectHistorySvc.Delete(r, "")
+	projectHistorySvc.ExecutionHistory(r, "")
 
 	// Tasks
 	taskSvc := service.TaskService{Route: "tasks", Controller: controller.TaskController{}}
@@ -138,6 +139,7 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	dashSvc.RegionalOverview(r, "regional-overview")
 	dashSvc.DirecaoMilestones(r, "direcao-milestones")
 	dashSvc.DepartamentoDetail(r, "departamento-detail")
+	dashSvc.UserDetail(r, "user-detail")
 
 	// Feedback
 	feedbackSvc := service.FeedbackService{Route: "feedback", Controller: controller.FeedbackController{}}

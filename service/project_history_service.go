@@ -26,3 +26,7 @@ func (s ProjectHistoryService) Update(r *gin.RouterGroup, _ string) {
 func (s ProjectHistoryService) Delete(r *gin.RouterGroup, _ string) {
 	r.DELETE("/"+s.Route+"/history/:entry_id", s.Controller.Delete)
 }
+
+func (s ProjectHistoryService) ExecutionHistory(r *gin.RouterGroup, _ string) {
+	r.GET("/"+s.Route+"/:id/execution-history", s.Controller.ExecutionHistory)
+}

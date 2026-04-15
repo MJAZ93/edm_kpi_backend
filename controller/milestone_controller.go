@@ -210,6 +210,16 @@ func (MilestoneController) Update(c *gin.Context) {
 		return
 	}
 
+	// Only the assigned user (task or milestone level) can update milestone data
+	callerID := util.ExtractUserID(c)
+	callerRole := util.ExtractRole(c)
+	isAssigned := (milestone.AssignedTo != nil && *milestone.AssignedTo == callerID) ||
+		(task.AssignedTo != nil && *task.AssignedTo == callerID)
+	if callerRole != "CA" && !isAssigned {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "Apenas o responsável atribuído pode actualizar este indicador."})
+		return
+	}
+
 	if input.AchievedValue != nil {
 		milestone.AchievedValue = *input.AchievedValue
 	}
@@ -378,6 +388,17 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 		return
 	}
 
+	// Only the assigned user can add progress
+	callerRole := util.ExtractRole(c)
+	var taskDao3 dao.TaskDao
+	parentTask, _ := taskDao3.GetByID(ms.TaskID)
+	isAssigned := (ms.AssignedTo != nil && *ms.AssignedTo == userID) ||
+		(parentTask.AssignedTo != nil && *parentTask.AssignedTo == userID)
+	if callerRole != "CA" && !isAssigned {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "Apenas o responsável atribuído pode registar progresso."})
+		return
+	}
+
 	// Validate uniqueness of period_reference per milestone (one entry per period)
 	if input.PeriodReference != "" {
 		var count int64
@@ -410,8 +431,8 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 	ms.UpdatedBy = &userID
 
 	// Detect reduction goal from parent task (target < start)
-	taskDao := dao.TaskDao{}
-	parentTask, _ := taskDao.GetByID(ms.TaskID)
+	var taskDao4 dao.TaskDao
+	parentTask, _ = taskDao4.GetByID(ms.TaskID)
 	isReduction := false
 	if parentTask.StartValue != nil && parentTask.TargetValue < *parentTask.StartValue {
 		isReduction = true
@@ -435,7 +456,7 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 
 	// Recalculate parent task current_value (skip if MANUAL)
 	if parentTask.AggregationType != "MANUAL" {
-		taskDao.RecalcCurrentValue(ms.TaskID)
+		taskDao4.RecalcCurrentValue(ms.TaskID)
 	}
 
 	// Refresh performance cache asynchronously
