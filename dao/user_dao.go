@@ -90,6 +90,10 @@ func (d *UserDao) UpdateLastLogin(userID uint) {
 	Database.Model(&model.User{}).Where("id = ?", userID).Update("last_login", now)
 }
 
+func (d *UserDao) ClearForcePasswordChange(userID uint) error {
+	return Database.Model(&model.User{}).Where("id = ?", userID).Update("force_password_change", false).Error
+}
+
 func (d *UserDao) GetByIDs(ids []uint) ([]model.User, error) {
 	var users []model.User
 	err := Database.Where("id IN ?", ids).Find(&users).Error

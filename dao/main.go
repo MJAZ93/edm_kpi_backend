@@ -48,4 +48,8 @@ func RunMigrations() {
 	// Ensure milestones.aggregation_type defaults to SUM_UP and backfill NULLs
 	Database.Exec("ALTER TABLE milestones ALTER COLUMN aggregation_type SET DEFAULT 'SUM_UP';")
 	Database.Exec("UPDATE milestones SET aggregation_type = 'SUM_UP' WHERE aggregation_type IS NULL OR aggregation_type = '';")
+
+	// Force all existing users to change password on next login
+	Database.Exec("ALTER TABLE users ALTER COLUMN force_password_change SET DEFAULT true;")
+	Database.Exec("UPDATE users SET force_password_change = true WHERE deleted_at IS NULL;")
 }

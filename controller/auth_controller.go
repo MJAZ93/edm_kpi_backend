@@ -7,6 +7,7 @@ import (
 	"kpi-backend/util"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthController struct{}
@@ -108,6 +109,7 @@ func (AuthController) ResetPassword(c *gin.Context) {
 	}
 
 	user.Password = input.Password
+	user.ForcePasswordChange = false
 	if err := userDao.Update(&user); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -116,4 +118,40 @@ func (AuthController) ResetPassword(c *gin.Context) {
 	userDao.ClearResetToken(user.ID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "password updated"})
+}
+
+type ChangePasswordInput struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required,min=8"`
+}
+
+func (AuthController) ChangePassword(c *gin.Context) {
+	var input ChangePasswordInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
+
+	userID := util.ExtractUserID(c)
+	userDao := dao.UserDao{}
+	user, err := userDao.GetByID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+		return
+	}
+
+	// Validate current password
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.CurrentPassword)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "wrong_password", "message": "Password actual incorrecta"})
+		return
+	}
+
+	user.Password = input.NewPassword
+	user.ForcePasswordChange = false
+	if err := userDao.Update(&user); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "password changed"})
 }

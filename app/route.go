@@ -22,6 +22,9 @@ func PublicRoutes(r *gin.RouterGroup) {
 }
 
 func PrivateRoutes(r *gin.RouterGroup) {
+	// Auth (private)
+	r.PUT("auth/change-password", controller.AuthController{}.ChangePassword)
+
 	// Users
 	userSvc := service.UserService{Route: "users", Controller: controller.UserController{}}
 	userSvc.Me(r, "me")

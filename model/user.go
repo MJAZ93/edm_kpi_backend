@@ -14,6 +14,7 @@ type User struct {
 	Password             string     `gorm:"not null;size:255" json:"-"`
 	Role                 string     `gorm:"not null;size:20" json:"role"` // ADMIN, CA, PELOURO, DIRECAO, DEPARTAMENTO
 	Active               bool       `gorm:"default:true" json:"active"`
+	ForcePasswordChange  bool       `gorm:"default:true" json:"-"`
 	PasswordResetToken   string     `gorm:"size:255" json:"-"`
 	PasswordResetExpires *time.Time `json:"-"`
 	LastLogin            *time.Time `json:"last_login,omitempty"`
@@ -35,28 +36,30 @@ func (u *User) BeforeSave(tx *gorm.DB) error {
 }
 
 type UserResponse struct {
-	ID            uint       `json:"id"`
-	Name          string     `json:"name"`
-	Email         string     `json:"email"`
-	Role          string     `json:"role"`
-	Active        bool       `json:"active"`
-	LastLogin     *time.Time `json:"last_login,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID                  uint       `json:"id"`
+	Name                string     `json:"name"`
+	Email               string     `json:"email"`
+	Role                string     `json:"role"`
+	Active              bool       `json:"active"`
+	ForcePasswordChange bool       `json:"force_password_change"`
+	LastLogin           *time.Time `json:"last_login,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
 	// DirectorScope is only set for DIRECAO role users:
 	// "DIRECTION" — responsible for a Direcção (full write access)
 	// "REGION"    — responsible for a Região only (read-only)
 	// ""          — not configured as responsible for anything
-	DirectorScope string     `json:"director_scope,omitempty"`
+	DirectorScope string `json:"director_scope,omitempty"`
 }
 
 func (u *User) ToResponse() UserResponse {
 	return UserResponse{
-		ID:        u.ID,
-		Name:      u.Name,
-		Email:     u.Email,
-		Role:      u.Role,
-		Active:    u.Active,
-		LastLogin: u.LastLogin,
-		CreatedAt: u.CreatedAt,
+		ID:                  u.ID,
+		Name:                u.Name,
+		Email:               u.Email,
+		Role:                u.Role,
+		Active:              u.Active,
+		ForcePasswordChange: u.ForcePasswordChange,
+		LastLogin:           u.LastLogin,
+		CreatedAt:           u.CreatedAt,
 	}
 }

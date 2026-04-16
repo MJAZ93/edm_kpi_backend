@@ -74,11 +74,12 @@ func (UserController) Create(c *gin.Context) {
 	}
 
 	user := model.User{
-		Name:     input.Name,
-		Email:    input.Email,
-		Password: input.Password,
-		Role:     input.Role,
-		Active:   true,
+		Name:                input.Name,
+		Email:               input.Email,
+		Password:            input.Password,
+		Role:                input.Role,
+		Active:              true,
+		ForcePasswordChange: true,
 	}
 
 	userDao := dao.UserDao{}
