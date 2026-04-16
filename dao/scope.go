@@ -335,6 +335,15 @@ func (s *UserScope) CanSeeProject(p model.Project) bool {
 	return false
 }
 
+// IsDeptHead returns true if the given user is listed as responsible_id
+// on at least one departamento. Used to distinguish dept heads from regular
+// technicians who share the DEPARTAMENTO role.
+func IsDeptHead(userID uint) bool {
+	var count int64
+	Database.Raw(`SELECT COUNT(*) FROM departamentos WHERE responsible_id = ? AND deleted_at IS NULL`, userID).Scan(&count)
+	return count > 0
+}
+
 func containsID(ids []uint, id uint) bool {
 	for _, v := range ids {
 		if v == id {

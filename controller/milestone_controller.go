@@ -113,9 +113,15 @@ func (MilestoneController) Create(c *gin.Context) {
 		return
 	}
 
-	// DEPARTAMENTO users can only create milestones on tasks owned by their own department.
+	// DEPARTAMENTO users: only dept heads can create milestones.
 	if util.ExtractRole(c) == "DEPARTAMENTO" {
-		scope := dao.ResolveScope(util.ExtractUserID(c), "DEPARTAMENTO")
+		userID := util.ExtractUserID(c)
+		if !dao.IsDeptHead(userID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "técnicos não podem criar indicadores"})
+			return
+		}
+		// Dept head: can only create on tasks owned by their own department.
+		scope := dao.ResolveScope(userID, "DEPARTAMENTO")
 		ownDept := false
 		for _, id := range scope.DepartamentoIDs {
 			if task.OwnerType == "DEPARTAMENTO" && task.OwnerID == id {
@@ -234,6 +240,17 @@ func (MilestoneController) Update(c *gin.Context) {
 	if callerRole != "CA" && !isAssigned {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "Apenas o responsável atribuído pode actualizar este indicador."})
 		return
+	}
+
+	// Technicians (non-dept-head DEPARTAMENTO users) can only update progress fields.
+	isTechnician := callerRole == "DEPARTAMENTO" && !dao.IsDeptHead(callerID)
+	if isTechnician {
+		if input.Title != nil || input.Description != nil || input.ScopeType != nil ||
+			input.ScopeID != nil || input.Frequency != nil || input.PlannedValue != nil ||
+			input.PlannedDate != nil || input.AssignedTo != nil || input.AggregationType != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "técnicos só podem actualizar o progresso do indicador"})
+			return
+		}
 	}
 
 	if input.AchievedValue != nil {

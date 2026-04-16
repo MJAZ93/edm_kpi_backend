@@ -1545,6 +1545,11 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 		return
 	}
 
+	// ── Is this user a department head? ─────────────────────────────────────
+	var deptHeadCount int64
+	dao.Database.Raw(`SELECT COUNT(*) FROM departamentos WHERE responsible_id = ? AND deleted_at IS NULL`, userID).Scan(&deptHeadCount)
+	isDeptHead := deptHeadCount > 0
+
 	perfDao := dao.PerformanceDao{}
 
 	// ── Personal score ───────────────────────────────────────────────────────
@@ -1668,12 +1673,6 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 
 	// ── Unique ASC IDs from this member's milestones ──────────────────────────
 	ascIDSet := map[uint]bool{}
-	for _, m := range milestones {
-		if m.ScopeType == "ASC" && m.ScopeName != "" {
-			// ScopeID is not in MsRow directly; query separately
-		}
-	}
-	// Query directly: distinct ASC scope_ids for milestones assigned to this user
 	var rawAscIDs []uint
 	dao.Database.Raw(`
 		SELECT DISTINCT m.scope_id
@@ -1688,7 +1687,121 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 		ascIDs = append(ascIDs, id)
 	}
 
+	// ── Tasks assigned to this user ──────────────────────────────────────────
+	type TaskRow struct {
+		ID           uint   `json:"id"`
+		Title        string `json:"title"`
+		Status       string `json:"status"`
+		OwnerType    string `json:"owner_type"`
+		OwnerID      uint   `json:"owner_id"`
+		ProjectTitle string `json:"project_title"`
+		GoalLabel    string `json:"goal_label"`
+	}
+	var myTasks []TaskRow
+	dao.Database.Raw(`
+		SELECT t.id, t.title, t.status, t.owner_type, t.owner_id,
+		       COALESCE(p.title, '') AS project_title,
+		       COALESCE(t.goal_label, '') AS goal_label
+		FROM tasks t
+		LEFT JOIN projects p ON p.id = t.project_id AND p.deleted_at IS NULL
+		WHERE t.assigned_to = ? AND t.deleted_at IS NULL
+		ORDER BY t.updated_at DESC
+	`, userID).Scan(&myTasks)
+	if myTasks == nil {
+		myTasks = []TaskRow{}
+	}
+
+	// ── Dept ranking with my position ────────────────────────────────────────
+	type RankRow struct {
+		Rank           int     `json:"rank"`
+		UserID         uint    `json:"user_id"`
+		Name           string  `json:"name"`
+		Category       string  `json:"category"`
+		ExecScore      float64 `json:"execution_score"`
+		GoalScore      float64 `json:"goal_score"`
+		TotalScore     float64 `json:"total_score"`
+		TrafficLight   string  `json:"traffic_light"`
+		IsMe           bool    `json:"is_me"`
+	}
+	var deptRanking []RankRow
+	myRank := 0
+	if len(departments) > 0 {
+		allScores, _ := perfDao.EmployeeRanking("DEPARTAMENTO", departments[0].ID)
+		// Sort by total score desc to build rank
+		for i, s := range allScores {
+			isMe := s.UserID == userID
+			deptRanking = append(deptRanking, RankRow{
+				Rank:         i + 1,
+				UserID:       s.UserID,
+				Name:         s.Name,
+				Category:     s.Category,
+				ExecScore:    math.Round(s.ExecScore*10) / 10,
+				GoalScore:    math.Round(s.GoalScore*10) / 10,
+				TotalScore:   math.Round(s.TotalScore*10) / 10,
+				TrafficLight: s.TrafficLight,
+				IsMe:         isMe,
+			})
+			if isMe {
+				myRank = i + 1
+			}
+		}
+	}
+	if deptRanking == nil {
+		deptRanking = []RankRow{}
+	}
+
+	// ── Achievements ─────────────────────────────────────────────────────────
+	type Achievement struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+		Icon  string `json:"icon"`
+		Color string `json:"color"`
+	}
+	var achievements []Achievement
+	if msBlocked == 0 && msTotal > 0 {
+		achievements = append(achievements, Achievement{ID: "no_blockers", Label: "Sem Bloqueios", Icon: "shield", Color: "var(--color-traffic-green)"})
+	}
+	if msDone > 0 && msTotal > 0 && msDone == msTotal {
+		achievements = append(achievements, Achievement{ID: "all_done", Label: "Tudo Concluído", Icon: "star", Color: "var(--color-traffic-green)"})
+	}
+	if myRank == 1 && myRank > 0 {
+		achievements = append(achievements, Achievement{ID: "top1", Label: "1.º do Departamento", Icon: "trophy", Color: "#f59e0b"})
+	} else if myRank <= 3 && myRank > 0 {
+		achievements = append(achievements, Achievement{ID: "top3", Label: "Top 3 do Departamento", Icon: "trophy", Color: "#f59e0b"})
+	}
+	if myScore.TotalScore >= 80 {
+		achievements = append(achievements, Achievement{ID: "high_score", Label: "Score Elevado", Icon: "trending-up", Color: "var(--color-primary)"})
+	}
+	// Streak: check last 3 months all done or good score
+	greenStreak := 0
+	for i := len(monthly) - 1; i >= 0; i-- {
+		m := monthly[i]
+		if m.Total > 0 && float64(m.Done)/float64(m.Total) >= 0.8 {
+			greenStreak++
+		} else {
+			break
+		}
+	}
+	if greenStreak >= 2 {
+		achievements = append(achievements, Achievement{ID: "streak", Label: fmt.Sprintf("%d Meses Consecutivos", greenStreak), Icon: "flame", Color: "#f97316"})
+	}
+	if achievements == nil {
+		achievements = []Achievement{}
+	}
+
+	// ── Overdue milestones ───────────────────────────────────────────────────
+	var overdueCount int
+	now := time.Now()
+	for _, m := range milestones {
+		if m.Status != "DONE" && m.PlannedDate != "" {
+			if pd, err := time.Parse("2006-01-02", m.PlannedDate); err == nil && pd.Before(now) {
+				overdueCount++
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
+		"is_dept_head": isDeptHead,
 		"user": gin.H{
 			"id":   userID,
 			"name": myScore.Name,
@@ -1708,10 +1821,15 @@ func (DashboardController) MemberOverview(c *gin.Context) {
 			"done":    msDone,
 			"pending": msPending,
 			"blocked": msBlocked,
+			"overdue": overdueCount,
 		},
-		"monthly":  monthly,
-		"projects": projects,
-		"asc_ids":  ascIDs,
+		"monthly":       monthly,
+		"projects":      projects,
+		"asc_ids":       ascIDs,
+		"my_tasks":      myTasks,
+		"dept_ranking":  deptRanking,
+		"my_rank":       myRank,
+		"achievements":  achievements,
 	})
 }
 

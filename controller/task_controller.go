@@ -206,9 +206,14 @@ func (TaskController) Create(c *gin.Context) {
 		return
 	}
 
-	// DEPARTAMENTO users can only create tasks owned by their own department.
+	// DEPARTAMENTO users: only dept heads can create tasks.
 	if util.ExtractRole(c) == "DEPARTAMENTO" {
-		scope := dao.ResolveScope(util.ExtractUserID(c), "DEPARTAMENTO")
+		userID := util.ExtractUserID(c)
+		if !dao.IsDeptHead(userID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "técnicos não podem criar acções"})
+			return
+		}
+		scope := dao.ResolveScope(userID, "DEPARTAMENTO")
 		ownDept := false
 		for _, id := range scope.DepartamentoIDs {
 			if id == input.OwnerID && input.OwnerType == "DEPARTAMENTO" {
@@ -299,8 +304,38 @@ func (TaskController) Single(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
+// TaskUpdateInput is a partial-update struct — all fields are optional.
+// Missing fields fall back to the existing task values.
+type TaskUpdateInput struct {
+	Title           *string      `json:"title"`
+	Description     *string      `json:"description"`
+	OwnerType       *string      `json:"owner_type"`
+	OwnerID         *uint        `json:"owner_id"`
+	AssignedTo      *uint        `json:"assigned_to"`
+	Frequency       *string      `json:"frequency"`
+	GoalLabel       *string      `json:"goal_label"`
+	StartValue      *float64     `json:"start_value"`
+	TargetValue     *float64     `json:"target_value"`
+	AggregationType *string      `json:"aggregation_type"`
+	CurrentValue    *float64     `json:"current_value"`
+	Weight          *float64     `json:"weight"`
+	StartDate       *string      `json:"start_date"`
+	EndDate         *string      `json:"end_date"`
+	ParentTaskID    *uint        `json:"parent_task_id"`
+	Scopes          []ScopeInput `json:"scopes"`
+}
+
 func (TaskController) Update(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+
+	// Technicians (non-head DEPARTAMENTO) cannot update tasks
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		if !dao.IsDeptHead(util.ExtractUserID(c)) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "técnicos não podem actualizar acções"})
+			return
+		}
+	}
+
 	taskDao := dao.TaskDao{}
 	task, err := taskDao.GetByID(uint(id))
 	if err != nil {
@@ -310,33 +345,49 @@ func (TaskController) Update(c *gin.Context) {
 
 	oldData := task
 
-	var input TaskInput
+	var input TaskUpdateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
 		return
 	}
-	if err := validateTaskAssignee(input.OwnerType, input.OwnerID, input.AssignedTo); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
-		return
-	}
 
-	task.Title = input.Title
-	task.Description = input.Description
-	task.OwnerType = input.OwnerType
-	task.OwnerID = input.OwnerID
-	task.AssignedTo = input.AssignedTo
-	task.Frequency = input.Frequency
-	task.GoalLabel = input.GoalLabel
-	task.StartValue = input.StartValue
-	task.TargetValue = input.TargetValue
-	if input.AggregationType != "" {
-		task.AggregationType = input.AggregationType
+	// Apply only the fields that were provided
+	if input.Title != nil {
+		task.Title = *input.Title
 	}
-	if input.Weight > 0 {
-		task.Weight = input.Weight
+	if input.Description != nil {
+		task.Description = *input.Description
 	}
-	task.ParentTaskID = input.ParentTaskID
-
+	if input.OwnerType != nil {
+		task.OwnerType = *input.OwnerType
+	}
+	if input.OwnerID != nil {
+		task.OwnerID = *input.OwnerID
+	}
+	if input.AssignedTo != nil {
+		task.AssignedTo = input.AssignedTo
+	}
+	if input.Frequency != nil {
+		task.Frequency = *input.Frequency
+	}
+	if input.GoalLabel != nil {
+		task.GoalLabel = *input.GoalLabel
+	}
+	if input.StartValue != nil {
+		task.StartValue = input.StartValue
+	}
+	if input.TargetValue != nil {
+		task.TargetValue = *input.TargetValue
+	}
+	if input.AggregationType != nil && *input.AggregationType != "" {
+		task.AggregationType = *input.AggregationType
+	}
+	if input.Weight != nil && *input.Weight > 0 {
+		task.Weight = *input.Weight
+	}
+	if input.ParentTaskID != nil {
+		task.ParentTaskID = input.ParentTaskID
+	}
 	if input.StartDate != nil {
 		t, _ := parseDate(*input.StartDate)
 		task.StartDate = t
@@ -346,6 +397,11 @@ func (TaskController) Update(c *gin.Context) {
 		task.EndDate = t
 	}
 
+	if err := validateTaskAssignee(task.OwnerType, task.OwnerID, task.AssignedTo); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
+
 	if err := taskDao.Update(&task); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
 		return
@@ -353,14 +409,12 @@ func (TaskController) Update(c *gin.Context) {
 
 	// Handle current_value: MANUAL override or auto-recalc
 	if task.AggregationType == "MANUAL" && input.CurrentValue != nil {
-		// Direct override for MANUAL aggregation
 		task.CurrentValue = *input.CurrentValue
 		taskDao.Update(&task)
 		perfDao := dao.PerformanceDao{}
 		go perfDao.RefreshForTask(task.ID)
 		go perfDao.RefreshForProject(task.ProjectID)
 	} else if task.AggregationType != "MANUAL" {
-		// Auto-recalculate if aggregation type or start_value changed
 		startChanged := (task.StartValue == nil) != (oldData.StartValue == nil) ||
 			(task.StartValue != nil && oldData.StartValue != nil && *task.StartValue != *oldData.StartValue)
 		if task.AggregationType != oldData.AggregationType || startChanged {
