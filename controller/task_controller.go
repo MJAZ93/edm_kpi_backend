@@ -206,6 +206,22 @@ func (TaskController) Create(c *gin.Context) {
 		return
 	}
 
+	// DEPARTAMENTO users can only create tasks owned by their own department.
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		scope := dao.ResolveScope(util.ExtractUserID(c), "DEPARTAMENTO")
+		ownDept := false
+		for _, id := range scope.DepartamentoIDs {
+			if id == input.OwnerID && input.OwnerType == "DEPARTAMENTO" {
+				ownDept = true
+				break
+			}
+		}
+		if !ownDept {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "só pode criar acções para o seu departamento"})
+			return
+		}
+	}
+
 	aggType := input.AggregationType
 	if aggType == "" {
 		aggType = "SUM_UP"

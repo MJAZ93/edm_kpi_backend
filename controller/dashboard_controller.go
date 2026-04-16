@@ -1366,6 +1366,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		TaskID       uint   `json:"task_id"`
 		TaskTitle    string `json:"task_title"`
 		ProjectTitle string `json:"project_title"`
+		AssigneeID   uint   `json:"assignee_id"`
 		AssigneeName string `json:"assignee_name,omitempty"`
 		Frequency    string `json:"frequency"`
 		OverdueDays  int    `json:"overdue_days"`
@@ -1377,6 +1378,7 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		       t.id AS task_id,
 		       t.title AS task_title,
 		       COALESCE(p.title, '') AS project_title,
+		       COALESCE(m.assigned_to, t.assigned_to) AS assignee_id,
 		       COALESCE(ms_assignee.name, task_assignee.name, '') AS assignee_name,
 		       COALESCE(m.frequency, t.frequency, '') AS frequency,
 		       GREATEST(0, EXTRACT(DAY FROM NOW() - (
@@ -1465,6 +1467,44 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		deptUsers = []DeptUser{}
 	}
 
+	// ── Per-member performance summary ───────────────────────────────────────
+	type MemberPerfItem struct {
+		UserID       uint    `json:"user_id"`
+		Name         string  `json:"name"`
+		ExecScore    float64 `json:"execution_score"`
+		GoalScore    float64 `json:"goal_score"`
+		TotalScore   float64 `json:"total_score"`
+		TrafficLight string  `json:"traffic_light"`
+		MsTotal      int     `json:"ms_total"`
+		MsDone       int     `json:"ms_done"`
+		MsOverdue    int     `json:"ms_overdue"`
+	}
+
+	memberScores, _ := perfDao.EmployeeRanking("DEPARTAMENTO", dept.ID)
+	overdueByUser := map[uint]int{}
+	for _, om := range overdueMilestones {
+		if om.AssigneeID > 0 {
+			overdueByUser[om.AssigneeID]++
+		}
+	}
+	var memberPerf []MemberPerfItem
+	for _, s := range memberScores {
+		memberPerf = append(memberPerf, MemberPerfItem{
+			UserID:       s.UserID,
+			Name:         s.Name,
+			ExecScore:    math.Round(s.ExecScore*10) / 10,
+			GoalScore:    math.Round(s.GoalScore*10) / 10,
+			TotalScore:   math.Round(s.TotalScore*10) / 10,
+			TrafficLight: s.TrafficLight,
+			MsTotal:      s.MsTotal,
+			MsDone:       s.MsDone,
+			MsOverdue:    overdueByUser[s.UserID],
+		})
+	}
+	if memberPerf == nil {
+		memberPerf = []MemberPerfItem{}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"department": gin.H{
 			"id":              dept.ID,
@@ -1487,7 +1527,8 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 			"overdue":            overdueCount,
 			"overdue_milestones": len(overdueMilestones),
 		},
-		"users": deptUsers,
+		"users":              deptUsers,
+		"member_performance": memberPerf,
 	})
 }
 

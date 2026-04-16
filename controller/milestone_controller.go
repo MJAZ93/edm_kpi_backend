@@ -113,6 +113,22 @@ func (MilestoneController) Create(c *gin.Context) {
 		return
 	}
 
+	// DEPARTAMENTO users can only create milestones on tasks owned by their own department.
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		scope := dao.ResolveScope(util.ExtractUserID(c), "DEPARTAMENTO")
+		ownDept := false
+		for _, id := range scope.DepartamentoIDs {
+			if task.OwnerType == "DEPARTAMENTO" && task.OwnerID == id {
+				ownDept = true
+				break
+			}
+		}
+		if !ownDept {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "só pode criar indicadores nas acções do seu departamento"})
+			return
+		}
+	}
+
 	plannedDate, err := parseDate(input.PlannedDate)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": "invalid planned_date format"})

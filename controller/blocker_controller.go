@@ -53,6 +53,42 @@ func (BlockerController) Create(c *gin.Context) {
 		return
 	}
 
+	// DEPARTAMENTO: can only report blockers on own dept's tasks/milestones
+	if util.ExtractRole(c) == "DEPARTAMENTO" {
+		scope := dao.ResolveScope(util.ExtractUserID(c), "DEPARTAMENTO")
+		allowed := false
+		taskDao := dao.TaskDao{}
+		if input.EntityType == "TASK" {
+			t, err := taskDao.GetByID(input.EntityID)
+			if err == nil {
+				for _, id := range scope.DepartamentoIDs {
+					if t.OwnerType == "DEPARTAMENTO" && t.OwnerID == id {
+						allowed = true
+						break
+					}
+				}
+			}
+		} else if input.EntityType == "MILESTONE" {
+			milestoneDao := dao.MilestoneDao{}
+			ms, err := milestoneDao.GetByID(input.EntityID)
+			if err == nil {
+				t, err := taskDao.GetByID(ms.TaskID)
+				if err == nil {
+					for _, id := range scope.DepartamentoIDs {
+						if t.OwnerType == "DEPARTAMENTO" && t.OwnerID == id {
+							allowed = true
+							break
+						}
+					}
+				}
+			}
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "só pode reportar constrangimentos nas acções e indicadores do seu departamento"})
+			return
+		}
+	}
+
 	slaDays := input.SLADays
 	if slaDays <= 0 {
 		slaDays = 3

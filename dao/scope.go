@@ -13,7 +13,11 @@ type UserScope struct {
 	UserID          uint
 	PelouroIDs      []uint
 	DirecaoIDs      []uint
-	DepartamentoIDs []uint
+	DepartamentoIDs []uint // own depts only — used for write-permission checks
+	// AllDirecaoDeptIDs holds ALL departamento IDs under the user's direcaos.
+	// For DEPARTAMENTO role it is a superset of DepartamentoIDs and enables
+	// read-only visibility into the entire direction.
+	AllDirecaoDeptIDs []uint
 	// Regional director fields — set when DIRECAO user has no direcão but is
 	// responsible for a Região. RegiaoID != 0 indicates regional-director mode.
 	RegiaoID uint
@@ -143,6 +147,16 @@ func (s *UserScope) resolveDepartamento(userID uint) {
 		for _, d := range dirs {
 			s.PelouroIDs = appendUnique(s.PelouroIDs, d.PelouroID)
 		}
+		// Expand to all departamentos in the direction for read-only visibility.
+		var allDirecaoDepts []model.Departamento
+		Database.Where("direcao_id IN ? AND deleted_at IS NULL", s.DirecaoIDs).Find(&allDirecaoDepts)
+		for _, d := range allDirecaoDepts {
+			s.AllDirecaoDeptIDs = appendUnique(s.AllDirecaoDeptIDs, d.ID)
+		}
+	}
+	// Seed AllDirecaoDeptIDs with own depts even if no direcao resolved
+	for _, id := range s.DepartamentoIDs {
+		s.AllDirecaoDeptIDs = appendUnique(s.AllDirecaoDeptIDs, id)
 	}
 }
 
@@ -179,18 +193,18 @@ func (s *UserScope) ApplyToProjects(q *gorm.DB) *gorm.DB {
 		return q.Where(cond)
 	}
 
-	// Department users should also see any project that has tasks owned by
-	// their department(s), even when the project itself was created higher up.
+	// Department users see any project created at or above their direction,
+	// plus any project that has tasks owned by ANY dept in their direction.
 	if s.Role == "DEPARTAMENTO" {
 		taskOwnedProjectSubq := Database.Model(&model.Task{}).
 			Select("DISTINCT project_id").
-			Where("owner_type = 'DEPARTAMENTO' AND owner_id IN ? AND deleted_at IS NULL", safeIDs(s.DepartamentoIDs))
+			Where("owner_type = 'DEPARTAMENTO' AND owner_id IN ? AND deleted_at IS NULL", safeIDs(s.AllDirecaoDeptIDs))
 
 		return q.Where(
 			Database.Where("creator_type IN ('CA','ADMIN')").
 				Or("creator_type = 'PELOURO' AND creator_org_id IN ?", safeIDs(s.PelouroIDs)).
 				Or("creator_type = 'DIRECAO' AND creator_org_id IN ?", safeIDs(s.DirecaoIDs)).
-				Or("creator_type = 'DEPARTAMENTO' AND creator_org_id IN ?", safeIDs(s.DepartamentoIDs)).
+				Or("creator_type = 'DEPARTAMENTO' AND creator_org_id IN ?", safeIDs(s.AllDirecaoDeptIDs)).
 				Or("id IN (?)", taskOwnedProjectSubq),
 		)
 	}
@@ -226,9 +240,14 @@ func (s *UserScope) ApplyToTasks(q *gorm.DB) *gorm.DB {
 	if s.RegiaoID != 0 {
 		return q
 	}
+	// DEPARTAMENTO: read-only access to all depts in the direction.
+	readDeptIDs := safeIDs(s.AllDirecaoDeptIDs)
+	if len(s.AllDirecaoDeptIDs) == 0 {
+		readDeptIDs = safeIDs(s.DepartamentoIDs)
+	}
 	return q.Where(
 		Database.Where("owner_type = 'DIRECAO' AND owner_id IN ?", safeIDs(s.DirecaoIDs)).
-			Or("owner_type = 'DEPARTAMENTO' AND owner_id IN ?", safeIDs(s.DepartamentoIDs)),
+			Or("owner_type = 'DEPARTAMENTO' AND owner_id IN ?", readDeptIDs),
 	)
 }
 
@@ -241,10 +260,14 @@ func (s *UserScope) ApplyToMilestones(q *gorm.DB) *gorm.DB {
 	if s.RegiaoID != 0 {
 		return q
 	}
+	readDeptIDs := safeIDs(s.AllDirecaoDeptIDs)
+	if len(s.AllDirecaoDeptIDs) == 0 {
+		readDeptIDs = safeIDs(s.DepartamentoIDs)
+	}
 	return q.Where("task_id IN (?)",
 		Database.Model(&model.Task{}).Select("id").Where(
 			Database.Where("owner_type = 'DIRECAO' AND owner_id IN ?", safeIDs(s.DirecaoIDs)).
-				Or("owner_type = 'DEPARTAMENTO' AND owner_id IN ?", safeIDs(s.DepartamentoIDs)),
+				Or("owner_type = 'DEPARTAMENTO' AND owner_id IN ?", readDeptIDs),
 		),
 	)
 }
@@ -255,9 +278,13 @@ func (s *UserScope) TaskIDsSubquery() *gorm.DB {
 	if s.IsGlobal {
 		return q
 	}
+	readDeptIDs := safeIDs(s.AllDirecaoDeptIDs)
+	if len(s.AllDirecaoDeptIDs) == 0 {
+		readDeptIDs = safeIDs(s.DepartamentoIDs)
+	}
 	return q.Where(
 		Database.Where("owner_type = 'DIRECAO' AND owner_id IN ?", safeIDs(s.DirecaoIDs)).
-			Or("owner_type = 'DEPARTAMENTO' AND owner_id IN ?", safeIDs(s.DepartamentoIDs)),
+			Or("owner_type = 'DEPARTAMENTO' AND owner_id IN ?", readDeptIDs),
 	)
 }
 
@@ -274,7 +301,9 @@ func (s *UserScope) CanSeeTask(task model.Task) bool {
 	case "DIRECAO":
 		return containsID(s.DirecaoIDs, task.OwnerID)
 	case "DEPARTAMENTO":
-		return containsID(s.DepartamentoIDs, task.OwnerID)
+		// Can see tasks from own depts OR any sibling dept in the direction.
+		return containsID(s.DepartamentoIDs, task.OwnerID) ||
+			containsID(s.AllDirecaoDeptIDs, task.OwnerID)
 	}
 	return false
 }
