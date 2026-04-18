@@ -176,6 +176,13 @@ func (MilestoneController) Create(c *gin.Context) {
 		return
 	}
 
+	// Auto-generate monthly target rows (metas mensais) for the task's date
+	// range so the user has one editable row per month from day one.
+	if task.StartDate != nil && task.EndDate != nil {
+		mmt := dao.MilestoneMonthlyTargetDao{}
+		go mmt.EnsureMonthsForMilestone(milestone.ID, *task.StartDate, *task.EndDate, util.ExtractUserID(c))
+	}
+
 	auditDao := dao.AuditDao{}
 	auditDao.Write("milestone", milestone.ID, util.ExtractUserID(c), "CREATE", nil, milestone, c.ClientIP())
 
@@ -323,6 +330,9 @@ func (MilestoneController) Update(c *gin.Context) {
 	// Recalculate parent task current_value (skip if MANUAL)
 	if task.AggregationType != "MANUAL" {
 		taskDao.RecalcCurrentValue(milestone.TaskID)
+		// Record progress history using the milestone's planned_date as the period
+		histDao := dao.TaskProgressHistoryDao{}
+		go histDao.RecalcForPeriod(milestone.TaskID, milestone.PlannedDate, userID)
 	}
 
 	// Refresh performance cache: task owner + project-level
@@ -358,9 +368,15 @@ func (MilestoneController) Delete(c *gin.Context) {
 		return
 	}
 
+	// Remove the milestone's monthly target rows
+	mmt := dao.MilestoneMonthlyTargetDao{}
+	go mmt.DeleteByMilestone(uint(id))
+
 	// Recalc after delete
 	taskDao := dao.TaskDao{}
 	taskDao.RecalcCurrentValue(milestone.TaskID)
+	histDao := dao.TaskProgressHistoryDao{}
+	go histDao.RecalcForPeriod(milestone.TaskID, milestone.PlannedDate, util.ExtractUserID(c))
 
 	auditDao := dao.AuditDao{}
 	auditDao.Write("milestone", uint(id), util.ExtractUserID(c), "DELETE", milestone, nil, c.ClientIP())
@@ -487,9 +503,23 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 		return
 	}
 
+	// Sync the milestone monthly target's achieved_value for this period.
+	// Convert the period_reference (any format: YYYY-Www, YYYY-Qn, YYYY-MM…)
+	// to a YYYY-MM bucket so the correct monthly row is updated.
+	// Falls back to created_at month only when period_reference is absent/unparseable.
+	// Run SYNCHRONOUSLY so the response immediately reflects the new total.
+	{
+		period := periodRefToMonth(input.PeriodReference, progress.CreatedAt)
+		mmt := dao.MilestoneMonthlyTargetDao{}
+		_ = mmt.SyncAchievedFromProgress(ms.ID, period, userID)
+	}
+
 	// Recalculate parent task current_value (skip if MANUAL)
 	if parentTask.AggregationType != "MANUAL" {
 		taskDao4.RecalcCurrentValue(ms.TaskID)
+		// Record progress history using milestone's planned_date as the period
+		histDao := dao.TaskProgressHistoryDao{}
+		go histDao.RecalcForPeriod(ms.TaskID, ms.PlannedDate, userID)
 	}
 
 	// Refresh performance cache asynchronously
@@ -554,9 +584,21 @@ func (MilestoneController) UpdateProgress(c *gin.Context) {
 
 	// Recalculate parent task
 	ms, _ := milestoneDao.GetByID(progress.MilestoneID)
+
+	// Keep milestone monthly target achieved_value in sync (synchronous).
+	// Use the progress entry's period_reference (converted to YYYY-MM) so
+	// the correct monthly row is updated after the edit.
+	{
+		period := periodRefToMonth(progress.PeriodReference, progress.CreatedAt)
+		mmt := dao.MilestoneMonthlyTargetDao{}
+		_ = mmt.SyncAchievedFromProgress(ms.ID, period, util.ExtractUserID(c))
+	}
+
 	taskDao := dao.TaskDao{}
 	if ms.Task != nil && ms.Task.AggregationType != "MANUAL" {
 		taskDao.RecalcCurrentValue(ms.TaskID)
+		histDao := dao.TaskProgressHistoryDao{}
+		go histDao.RecalcForPeriod(ms.TaskID, ms.PlannedDate, util.ExtractUserID(c))
 	}
 
 	// Refresh performance cache

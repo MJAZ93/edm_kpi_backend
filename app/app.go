@@ -40,11 +40,13 @@ func LoadDatabase() error {
 		&model.TaskScope{},
 		&model.Milestone{},
 		&model.MilestoneProgress{},
+		&model.MilestoneMonthlyTarget{},
 		&model.Blocker{},
 		&model.AuditLog{},
 		&model.Notification{},
 		&model.PerformanceCache{},
 		&model.ProjectHistory{},
+		&model.TaskProgressHistory{},
 		&model.Feedback{},
 	}
 

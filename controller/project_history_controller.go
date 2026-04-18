@@ -122,9 +122,22 @@ func (ProjectHistoryController) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
+// milestoneTaskProgress computes the progress percentage (0–100) of a milestone
+// toward its task's goal, using the same universal formula as ComputeGoalScore.
+// Works for both growth goals (target > start) and reduction goals (target < start).
+// formula: (achieved - start) / (target - start) * 100
+func milestoneTaskProgress(achievedValue, startValue, targetValue float64) float64 {
+	diff := targetValue - startValue
+	if diff == 0 {
+		return 100
+	}
+	progress := (achievedValue - startValue) / diff * 100
+	return math.Max(0, math.Min(100, progress))
+}
+
 // ExecutionHistory returns per-period execution percentages for a project.
-// It groups all milestones (from all tasks in the project) by their planned_date
-// month, computes achieved/planned ratio per period, and also returns cumulative %.
+// Uses task_progress_histories for recorded months and task.current_value for
+// any month that has no history yet (including the current month).
 func (ProjectHistoryController) ExecutionHistory(c *gin.Context) {
 	projectID, _ := strconv.Atoi(c.Param("id"))
 
@@ -136,58 +149,91 @@ func (ProjectHistoryController) ExecutionHistory(c *gin.Context) {
 		return
 	}
 
-	// Fetch all milestones for tasks in this project
-	type MsRow struct {
-		PlannedDate   time.Time
-		PlannedValue  float64
-		AchievedValue float64
-		Status        string
+	// Fetch all task progress history records for this project
+	type HistRow struct {
+		TaskID      uint
+		Period      string
+		Value       float64
+		StartValue  *float64
+		TargetValue float64
 	}
-	var rows []MsRow
+	var histRows []HistRow
 	dao.Database.Raw(`
-		SELECT m.planned_date, m.planned_value, m.achieved_value, m.status
-		FROM milestones m
-		JOIN tasks t ON t.id = m.task_id AND t.deleted_at IS NULL
-		WHERE t.project_id = ? AND m.deleted_at IS NULL
-		ORDER BY m.planned_date ASC
-	`, projectID).Scan(&rows)
+		SELECT h.task_id, h.period, h.value, t.start_value, t.target_value
+		FROM task_progress_histories h
+		JOIN tasks t ON t.id = h.task_id AND t.deleted_at IS NULL
+		WHERE t.project_id = ? AND h.deleted_at IS NULL
+		ORDER BY h.period ASC
+	`, projectID).Scan(&histRows)
 
-	// Group by month (YYYY-MM)
+	// Fetch all tasks for the project (needed for current-month snapshot)
+	type TaskRow struct {
+		ID           uint
+		StartValue   *float64
+		TargetValue  float64
+		CurrentValue float64
+	}
+	var taskRows []TaskRow
+	dao.Database.Raw(`
+		SELECT id, start_value, target_value, current_value
+		FROM tasks
+		WHERE project_id = ? AND deleted_at IS NULL
+	`, projectID).Scan(&taskRows)
+
+	// PeriodData accumulates sum of progress % and count for averaging
 	type PeriodData struct {
-		Period        string  `json:"period"`
-		Planned       float64 `json:"planned"`
-		Achieved      float64 `json:"achieved"`
-		ExecPct       float64 `json:"exec_pct"`
-		CumPlanned    float64 `json:"cum_planned"`
-		CumAchieved   float64 `json:"cum_achieved"`
-		CumExecPct    float64 `json:"cum_exec_pct"`
-		MsCount       int     `json:"ms_count"`
-		MsDone        int     `json:"ms_done"`
+		Period      string  `json:"period"`
+		SumProgress float64 `json:"-"`
+		Count       float64 `json:"-"`
+		ExecPct     float64 `json:"exec_pct"`
+		CumPlanned  float64 `json:"cum_planned"`
+		CumAchieved float64 `json:"cum_achieved"`
+		CumExecPct  float64 `json:"cum_exec_pct"`
+		MsCount     int     `json:"ms_count"`
+		MsDone      int     `json:"ms_done"`
 	}
 
-	// Build milestone data indexed by month
+	// Build monthMap from recorded history
 	monthMap := map[string]*PeriodData{}
-	for _, r := range rows {
-		key := r.PlannedDate.Format("2006-01")
-		pd, exists := monthMap[key]
+	for _, r := range histRows {
+		pd, exists := monthMap[r.Period]
 		if !exists {
-			pd = &PeriodData{Period: key}
-			monthMap[key] = pd
+			pd = &PeriodData{Period: r.Period}
+			monthMap[r.Period] = pd
 		}
-		pd.Planned += r.PlannedValue
-		pd.Achieved += r.AchievedValue
-		pd.MsCount++
-		if r.Status == "DONE" {
-			pd.MsDone++
+		sv := 0.0
+		if r.StartValue != nil {
+			sv = *r.StartValue
 		}
+		progress := milestoneTaskProgress(r.Value, sv, r.TargetValue)
+		pd.SumProgress += progress
+		pd.Count++
 	}
 
-	// Generate ALL months from start_date to end_date
+	// Current month: ALWAYS use task.current_value as the live snapshot.
+	// This overrides any history entry for the current month because milestones for the
+	// current month may not yet be filled in (achieved_value still 0).
+	currentMonthKey := time.Now().Format("2006-01")
+	cur := &PeriodData{Period: currentMonthKey}
+	for _, t := range taskRows {
+		sv := 0.0
+		if t.StartValue != nil {
+			sv = *t.StartValue
+		}
+		progress := milestoneTaskProgress(t.CurrentValue, sv, t.TargetValue)
+		cur.SumProgress += progress
+		cur.Count++
+	}
+	monthMap[currentMonthKey] = cur
+
+	// Generate ALL months from start_date to end_date (capped at current month)
 	var startMonth, endMonth time.Time
 	if project.StartDate != nil {
 		startMonth = time.Date(project.StartDate.Year(), project.StartDate.Month(), 1, 0, 0, 0, 0, time.UTC)
-	} else if len(rows) > 0 {
-		startMonth = time.Date(rows[0].PlannedDate.Year(), rows[0].PlannedDate.Month(), 1, 0, 0, 0, 0, time.UTC)
+	} else if len(histRows) > 0 {
+		// parse earliest period from history
+		t, _ := time.Parse("2006-01", histRows[0].Period)
+		startMonth = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 	} else {
 		c.JSON(http.StatusOK, gin.H{"periods": []interface{}{}, "start_date": project.StartDate, "end_date": project.EndDate})
 		return
@@ -197,7 +243,6 @@ func (ProjectHistoryController) ExecutionHistory(c *gin.Context) {
 	} else {
 		endMonth = time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
 	}
-	// Also include current month if between start and end
 	now := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.UTC)
 	if now.Before(endMonth) {
 		endMonth = now
@@ -215,22 +260,23 @@ func (ProjectHistoryController) ExecutionHistory(c *gin.Context) {
 
 	// Compute per-period and cumulative execution %
 	periods := make([]PeriodData, 0, len(monthKeys))
-	var cumPlanned, cumAchieved float64
+	var cumSum, cumCount float64
 
 	for _, key := range monthKeys {
 		pd, exists := monthMap[key]
 		if !exists {
 			pd = &PeriodData{Period: key}
 		}
-		if pd.Planned > 0 {
-			pd.ExecPct = math.Round((pd.Achieved/pd.Planned)*1000) / 10
+		// Period exec_pct = average progress % of milestones due this month
+		if pd.Count > 0 {
+			pd.ExecPct = math.Round(pd.SumProgress/pd.Count*10) / 10
 		}
-		cumPlanned += pd.Planned
-		cumAchieved += pd.Achieved
-		pd.CumPlanned = cumPlanned
-		pd.CumAchieved = cumAchieved
-		if cumPlanned > 0 {
-			pd.CumExecPct = math.Round((cumAchieved/cumPlanned)*1000) / 10
+		cumSum += pd.SumProgress
+		cumCount += pd.Count
+		pd.CumPlanned = cumCount
+		pd.CumAchieved = cumSum
+		if cumCount > 0 {
+			pd.CumExecPct = math.Round(cumSum/cumCount*10) / 10
 		}
 		pd.Period = key
 		periods = append(periods, *pd)

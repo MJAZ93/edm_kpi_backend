@@ -86,6 +86,6 @@ func (d *DepartamentoDao) GetUsers(departamentoID uint) ([]model.User, error) {
 
 func (d *DepartamentoDao) GetByResponsible(userID uint) (model.Departamento, error) {
 	var dept model.Departamento
-	err := Database.Where("responsible_id = ?", userID).First(&dept).Error
+	err := Database.Where("responsible_id = ? AND deleted_at IS NULL", userID).First(&dept).Error
 	return dept, err
 }

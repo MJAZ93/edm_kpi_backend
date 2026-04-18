@@ -102,6 +102,8 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	taskSvc.Single(r, "")
 	taskSvc.Update(r, "")
 	taskSvc.Delete(r, "")
+	taskSvc.ListProgress(r, "")
+	taskSvc.PatchProgress(r, "")
 
 	// Milestones
 	milestoneSvc := service.MilestoneService{Route: "milestones", Controller: controller.MilestoneController{}}
@@ -114,6 +116,11 @@ func PrivateRoutes(r *gin.RouterGroup) {
 	milestoneSvc.AddProgress(r, "")
 	milestoneSvc.ListProgress(r, "")
 	milestoneSvc.UpdateProgress(r, "")
+
+	// Monthly targets (metas mensais) — per-milestone monthly planned/achieved
+	// + aggregated chart endpoints at task/project level.
+	monthlySvc := service.MilestoneMonthlyTargetService{Controller: controller.MilestoneMonthlyTargetController{}}
+	monthlySvc.Register(r)
 
 	// Blockers
 	blockerSvc := service.BlockerService{Route: "blockers", Controller: controller.BlockerController{}}

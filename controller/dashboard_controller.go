@@ -1455,14 +1455,17 @@ func (DashboardController) DepartamentoOverview(c *gin.Context) {
 		Role string `json:"role"`
 	}
 	var deptUsers []DeptUser
+	// Include the responsible (head) via responsible_id, UNION members from departamento_users.
 	dao.Database.Raw(`
-		SELECT u.id, u.name, u.role FROM users u WHERE u.id = ?
+		SELECT u.id, u.name, u.role FROM users u
+		JOIN departamentos d ON d.responsible_id = u.id AND d.id = ? AND d.deleted_at IS NULL
+		WHERE u.deleted_at IS NULL
 		UNION
 		SELECT u.id, u.name, u.role FROM users u
-		JOIN departamento_users du ON du.user_id = u.id
-		WHERE du.departamento_id = ?
+		JOIN departamento_users du ON du.user_id = u.id AND du.departamento_id = ?
+		WHERE u.deleted_at IS NULL
 		ORDER BY name ASC
-	`, userID, dept.ID).Scan(&deptUsers)
+	`, dept.ID, dept.ID).Scan(&deptUsers)
 	if deptUsers == nil {
 		deptUsers = []DeptUser{}
 	}
@@ -2182,7 +2185,7 @@ func (DashboardController) DirecaoMilestones(c *gin.Context) {
 // an explicit department ID in the URL path.
 func (DashboardController) DepartamentoDetail(c *gin.Context) {
 	role := util.ExtractRole(c)
-	if role != "CA" && role != "PELOURO" && role != "DIRECAO" && role != "DEPARTAMENTO" {
+	if role != "CA" && role != "PELOURO" && role != "DIRECAO" && role != "DEPARTAMENTO" && role != "ADMIN" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return
 	}

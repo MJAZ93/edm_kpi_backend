@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"kpi-backend/dao"
 	"kpi-backend/model"
@@ -407,10 +408,24 @@ func (TaskController) Update(c *gin.Context) {
 		return
 	}
 
+	// If the task's date range changed, extend every milestone's monthly
+	// rows to cover the new range (idempotent).
+	if task.StartDate != nil && task.EndDate != nil {
+		startChanged := oldData.StartDate == nil || !task.StartDate.Equal(*oldData.StartDate)
+		endChanged := oldData.EndDate == nil || !task.EndDate.Equal(*oldData.EndDate)
+		if startChanged || endChanged {
+			mmt := dao.MilestoneMonthlyTargetDao{}
+			go mmt.EnsureMonthsForTask(task.ID, *task.StartDate, *task.EndDate, util.ExtractUserID(c))
+		}
+	}
+
 	// Handle current_value: MANUAL override or auto-recalc
 	if task.AggregationType == "MANUAL" && input.CurrentValue != nil {
 		task.CurrentValue = *input.CurrentValue
 		taskDao.Update(&task)
+		// Record progress history for MANUAL tasks
+		histDao := dao.TaskProgressHistoryDao{}
+		go histDao.UpsertProgress(task.ID, task.CurrentValue, util.ExtractUserID(c))
 		perfDao := dao.PerformanceDao{}
 		go perfDao.RefreshForTask(task.ID)
 		go perfDao.RefreshForProject(task.ProjectID)
@@ -444,6 +459,71 @@ func (TaskController) Update(c *gin.Context) {
 
 	auditDao := dao.AuditDao{}
 	auditDao.Write("task", task.ID, util.ExtractUserID(c), "UPDATE", oldData, task, c.ClientIP())
+
+	result, _ := taskDao.GetByID(task.ID)
+	c.JSON(http.StatusOK, result)
+}
+
+// ListProgress handles GET /tasks/:id/progress
+// Returns all monthly progress history entries for a task (period + value).
+func (TaskController) ListProgress(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	histDao := dao.TaskProgressHistoryDao{}
+	entries, err := histDao.ListByTask(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": entries})
+}
+
+// PatchProgress handles PATCH /tasks/:id/progress
+// Allows updating a MANUAL task's current_value with a specific period reference.
+func (TaskController) PatchProgress(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+
+	taskDao := dao.TaskDao{}
+	task, err := taskDao.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+		return
+	}
+
+	if task.AggregationType != "MANUAL" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": "only MANUAL tasks support manual progress updates"})
+		return
+	}
+
+	var input struct {
+		CurrentValue float64 `json:"current_value" binding:"required"`
+		Period       string  `json:"period"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad_request", "message": err.Error()})
+		return
+	}
+
+	period := input.Period
+	if period == "" {
+		period = time.Now().Format("2006-01")
+	}
+
+	task.CurrentValue = input.CurrentValue
+	if err := taskDao.Update(&task); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+		return
+	}
+
+	histDao := dao.TaskProgressHistoryDao{}
+	_ = histDao.UpsertProgressForPeriod(task.ID, period, input.CurrentValue, util.ExtractUserID(c))
+
+	perfDao := dao.PerformanceDao{}
+	go perfDao.RefreshForTask(task.ID)
+	go perfDao.RefreshForProject(task.ProjectID)
+
+	auditDao := dao.AuditDao{}
+	auditDao.Write("task", task.ID, util.ExtractUserID(c), "UPDATE_PROGRESS", nil,
+		gin.H{"current_value": input.CurrentValue, "period": period}, c.ClientIP())
 
 	result, _ := taskDao.GetByID(task.ID)
 	c.JSON(http.StatusOK, result)

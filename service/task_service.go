@@ -30,3 +30,11 @@ func (s TaskService) Update(r *gin.RouterGroup, _ string) {
 func (s TaskService) Delete(r *gin.RouterGroup, _ string) {
 	r.DELETE("/"+s.Route+"/:id", s.Controller.Delete)
 }
+
+func (s TaskService) ListProgress(r *gin.RouterGroup, _ string) {
+	r.GET("/"+s.Route+"/:id/progress", s.Controller.ListProgress)
+}
+
+func (s TaskService) PatchProgress(r *gin.RouterGroup, _ string) {
+	r.PATCH("/"+s.Route+"/:id/progress", s.Controller.PatchProgress)
+}

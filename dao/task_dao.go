@@ -68,13 +68,14 @@ func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
 		aggType = "SUM_UP"
 	}
 
+	var execErr error
 	switch aggType {
 	case "SUM_DOWN":
 		startVal := float64(0)
 		if task.StartValue != nil {
 			startVal = *task.StartValue
 		}
-		return Database.Exec(`
+		execErr = Database.Exec(`
 			UPDATE tasks SET current_value = ? - (
 				SELECT COALESCE(SUM(achieved_value), 0)
 				FROM milestones
@@ -84,7 +85,7 @@ func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
 		`, startVal, taskID, taskID).Error
 
 	case "AVG":
-		return Database.Exec(`
+		execErr = Database.Exec(`
 			UPDATE tasks SET current_value = (
 				SELECT COALESCE(AVG(achieved_value), 0)
 				FROM milestones
@@ -94,7 +95,7 @@ func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
 		`, taskID, taskID).Error
 
 	case "LAST":
-		return Database.Exec(`
+		execErr = Database.Exec(`
 			UPDATE tasks SET current_value = COALESCE((
 				SELECT achieved_value
 				FROM milestones
@@ -106,7 +107,7 @@ func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
 		`, taskID, taskID).Error
 
 	default: // SUM_UP
-		return Database.Exec(`
+		execErr = Database.Exec(`
 			UPDATE tasks SET current_value = (
 				SELECT COALESCE(SUM(achieved_value), 0)
 				FROM milestones
@@ -115,6 +116,8 @@ func (d *TaskDao) RecalcCurrentValue(taskID uint) error {
 			WHERE id = ?
 		`, taskID, taskID).Error
 	}
+
+	return execErr
 }
 
 func (d *TaskDao) CreateScopes(scopes []model.TaskScope) error {

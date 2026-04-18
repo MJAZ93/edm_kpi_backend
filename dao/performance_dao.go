@@ -1,6 +1,7 @@
 package dao
 
 import (
+	"fmt"
 	"kpi-backend/model"
 	"kpi-backend/util"
 	"time"
@@ -8,7 +9,106 @@ import (
 
 type PerformanceDao struct{}
 
+// monthlyTargetExecScore returns the execution score for a task computed from
+// its milestones' monthly targets, respecting the task's AggregationType:
+//
+//   - LAST        → only the single most-recent period row counts
+//   - SUM_UP / SUM_DOWN / AVG / MANUAL (default) → sum all periods ≤ today
+//
+// Reduction goals (TargetValue < StartValue) use the inverted formula so that
+// lower achieved = better score.
+//
+// Returns (score, true) when monthly data with planned > 0 exists; (0, false) otherwise.
+func monthlyTargetExecScore(t model.Task) (float64, bool) {
+	now := time.Now()
+	currentPeriod := fmt.Sprintf("%04d-%02d", now.Year(), int(now.Month()))
+
+	startVal := float64(0)
+	if t.StartValue != nil {
+		startVal = *t.StartValue
+	}
+	isReduction := t.TargetValue < startVal
+
+	scoreFrom := func(planned, achieved float64) (float64, bool) {
+		if planned <= 0 {
+			return 0, false
+		}
+		if isReduction {
+			return util.ComputeExecutionScoreReduction(planned, achieved), true
+		}
+		return util.ComputeExecutionScore(planned, achieved), true
+	}
+
+	if t.AggregationType == "LAST" {
+		// Only the latest period that has a non-zero planned value
+		var r struct {
+			PlannedValue  float64
+			AchievedValue float64
+		}
+		Database.Raw(`
+			SELECT mmt.planned_value, mmt.achieved_value
+			FROM milestone_monthly_targets mmt
+			JOIN milestones m ON m.id = mmt.milestone_id AND m.deleted_at IS NULL
+			WHERE m.task_id      = ?
+			  AND mmt.deleted_at IS NULL
+			  AND mmt.period     <= ?
+			  AND mmt.planned_value > 0
+			ORDER BY mmt.period DESC
+			LIMIT 1
+		`, t.ID, currentPeriod).Scan(&r)
+		return scoreFrom(r.PlannedValue, r.AchievedValue)
+	}
+
+	// SUM_UP, SUM_DOWN, AVG, MANUAL — accumulate all periods up to today
+	var r struct {
+		SumPlanned  float64
+		SumAchieved float64
+	}
+	Database.Raw(`
+		SELECT
+			COALESCE(SUM(mmt.planned_value), 0)  AS sum_planned,
+			COALESCE(SUM(mmt.achieved_value), 0) AS sum_achieved
+		FROM milestone_monthly_targets mmt
+		JOIN milestones m ON m.id = mmt.milestone_id AND m.deleted_at IS NULL
+		WHERE m.task_id      = ?
+		  AND mmt.deleted_at IS NULL
+		  AND mmt.period     <= ?
+	`, t.ID, currentPeriod).Scan(&r)
+	return scoreFrom(r.SumPlanned, r.SumAchieved)
+}
+
+// userMonthlyTargetExecScore computes the execution score for a user across all
+// milestones assigned to them, using monthly target rows up to the current period.
+// Returns (score, true) when data with planned > 0 exists; (0, false) otherwise.
+func userMonthlyTargetExecScore(userID uint) (float64, bool) {
+	now := time.Now()
+	currentPeriod := fmt.Sprintf("%04d-%02d", now.Year(), int(now.Month()))
+
+	var r struct {
+		SumPlanned  float64
+		SumAchieved float64
+	}
+	Database.Raw(`
+		SELECT
+			COALESCE(SUM(mmt.planned_value), 0)  AS sum_planned,
+			COALESCE(SUM(mmt.achieved_value), 0) AS sum_achieved
+		FROM milestone_monthly_targets mmt
+		JOIN milestones m ON m.id = mmt.milestone_id AND m.deleted_at IS NULL
+		JOIN tasks      t ON t.id = m.task_id        AND t.deleted_at IS NULL
+		WHERE mmt.deleted_at IS NULL
+		  AND mmt.period <= ?
+		  AND COALESCE(m.assigned_to, t.assigned_to) = ?
+	`, currentPeriod, userID).Scan(&r)
+
+	if r.SumPlanned <= 0 {
+		return 0, false
+	}
+	return util.ComputeExecutionScore(r.SumPlanned, r.SumAchieved), true
+}
+
 // taskExecScore computes execution score for a task, respecting aggregation_type.
+// It first tries monthly target-based scoring (meta vs realizado per month) and
+// falls back to milestone-level planned/achieved values when no monthly data exists.
 // SUM_UP (default): sum planned/achieved across milestones.
 // AVG: average planned/achieved across milestones.
 // LAST: only the latest milestone counts (by planned_date desc, then updated_at desc).
@@ -18,6 +118,12 @@ func taskExecScore(t model.Task, milestones []model.Milestone) float64 {
 		return 0
 	}
 
+	// Prefer monthly target-based score: reflects actual meta vs realizado per month
+	if score, ok := monthlyTargetExecScore(t); ok {
+		return score
+	}
+
+	// Fallback: milestone-level global values
 	var planned, achieved float64
 
 	switch t.AggregationType {
@@ -567,14 +673,22 @@ func (d *PerformanceDao) EmployeeRanking(role string, orgID uint) ([]EmployeeSco
 			ORDER BY u.name
 		`, orgID).Scan(&rows)
 	case "DEPARTAMENTO":
+		// Include both the responsible (head) and all members in departamento_users.
+		// Use UNION to deduplicate if the head is also listed in departamento_users.
 		Database.Raw(`
-			SELECT u.id, u.name, u.role, du.departamento_id AS dept_id, COALESCE(d.name,'') AS dept_name
+			SELECT u.id, u.name, u.role, d.id AS dept_id, d.name AS dept_name
+			FROM users u
+			JOIN departamentos d ON d.responsible_id = u.id
+				AND d.id = ? AND d.deleted_at IS NULL
+			WHERE u.deleted_at IS NULL
+			UNION
+			SELECT u.id, u.name, u.role, du.departamento_id AS dept_id, COALESCE(d2.name,'') AS dept_name
 			FROM users u
 			JOIN departamento_users du ON du.user_id = u.id AND du.departamento_id = ?
-			LEFT JOIN departamentos d ON d.id = du.departamento_id
+			LEFT JOIN departamentos d2 ON d2.id = du.departamento_id AND d2.deleted_at IS NULL
 			WHERE u.deleted_at IS NULL
-			ORDER BY u.name
-		`, orgID).Scan(&rows)
+			ORDER BY name
+		`, orgID, orgID).Scan(&rows)
 	default:
 		return nil, nil
 	}
@@ -647,7 +761,13 @@ func (d *PerformanceDao) EmployeeRanking(role string, orgID uint) ([]EmployeeSco
 			taskIDs[m.TaskID] = true
 		}
 
-		exec := util.ComputeExecutionScore(totalPlanned, totalAchieved)
+		// Prefer monthly target-based execution score; fall back to milestone globals
+		var exec float64
+		if score, ok := userMonthlyTargetExecScore(r.ID); ok {
+			exec = score
+		} else {
+			exec = util.ComputeExecutionScore(totalPlanned, totalAchieved)
+		}
 
 		// Goal score: average of parent tasks' goal scores
 		var sumGoal float64
@@ -737,7 +857,13 @@ func (d *PerformanceDao) ScoreForUser(userID uint) EmployeeScore {
 		taskIDs[m.TaskID] = true
 	}
 
-	exec := util.ComputeExecutionScore(totalPlanned, totalAchieved)
+	// Prefer monthly target-based execution score; fall back to milestone globals
+	var exec float64
+	if score, ok := userMonthlyTargetExecScore(userID); ok {
+		exec = score
+	} else {
+		exec = util.ComputeExecutionScore(totalPlanned, totalAchieved)
+	}
 
 	var sumGoal float64
 	for taskID := range taskIDs {
