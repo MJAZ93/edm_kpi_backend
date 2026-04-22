@@ -495,7 +495,7 @@ func (TaskController) PatchProgress(c *gin.Context) {
 	}
 
 	var input struct {
-		CurrentValue float64 `json:"current_value" binding:"required"`
+		CurrentValue float64 `json:"current_value"` // 0 is a valid progress value
 		Period       string  `json:"period"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {

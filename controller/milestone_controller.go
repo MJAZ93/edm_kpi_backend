@@ -244,7 +244,7 @@ func (MilestoneController) Update(c *gin.Context) {
 	callerRole := util.ExtractRole(c)
 	isAssigned := (milestone.AssignedTo != nil && *milestone.AssignedTo == callerID) ||
 		(task.AssignedTo != nil && *task.AssignedTo == callerID)
-	if callerRole != "CA" && !isAssigned {
+	if callerRole != "CA" && callerRole != "ADMIN" && !isAssigned {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "Apenas o responsável atribuído pode actualizar este indicador."})
 		return
 	}
@@ -443,7 +443,7 @@ func (MilestoneController) AddProgress(c *gin.Context) {
 	parentTask, _ := taskDao3.GetByID(ms.TaskID)
 	isAssigned := (ms.AssignedTo != nil && *ms.AssignedTo == userID) ||
 		(parentTask.AssignedTo != nil && *parentTask.AssignedTo == userID)
-	if callerRole != "CA" && !isAssigned {
+	if callerRole != "CA" && callerRole != "ADMIN" && !isAssigned {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "Apenas o responsável atribuído pode registar progresso."})
 		return
 	}
